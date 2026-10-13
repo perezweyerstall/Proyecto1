@@ -123,13 +123,25 @@ describe('SpeechEngine', () => {
     expect(synth.last.text).toBe('Hola mundo.');
   });
 
-  it('pausa ante un error real del motor', () => {
+  it('pausa sin aviso si el sistema interrumpe la voz', () => {
     const { synth, engine } = setup();
     const onError = vi.fn();
     engine.onError = onError;
     engine.play();
+    synth.last.onboundary?.({ name: 'word', charIndex: 5 });
     synth.last.onerror?.({ error: 'interrupted' });
-    expect(engine.getSnapshot().status).toBe('playing');
+    expect(engine.getSnapshot()).toMatchObject({ status: 'paused', offset: 5 });
+    expect(onError).not.toHaveBeenCalled();
+    engine.play();
+    vi.runAllTimers();
+    expect(synth.last.text).toBe('mundo.');
+  });
+
+  it('pausa y avisa ante un error real del motor', () => {
+    const { synth, engine } = setup();
+    const onError = vi.fn();
+    engine.onError = onError;
+    engine.play();
     synth.last.onerror?.({ error: 'synthesis-failed' });
     expect(engine.getSnapshot().status).toBe('paused');
     expect(onError).toHaveBeenCalledWith('synthesis-failed');

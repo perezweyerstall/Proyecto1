@@ -208,7 +208,8 @@ export function formatDuration(minutes: number): string {
 export function deriveTitle(text: string, fallback = 'Documento sin título'): string {
   const first = text.split(PARAGRAPH_SEP)[0]?.trim() ?? '';
   if (!first) return fallback;
-  const sentence = first.split(/(?<=[.!?…])\s/)[0];
+  // Sin lookbehind: Safari anterior a 16.4 no lo admite.
+  const sentence = first.match(/^.*?[.!?…](?=\s|$)/)?.[0] ?? first;
   const words = sentence.split(/\s+/).slice(0, 10).join(' ');
   return words.length < sentence.length ? `${words.replace(/[,;:]$/, '')}…` : words;
 }

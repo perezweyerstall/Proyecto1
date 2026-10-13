@@ -1,9 +1,20 @@
 // Service worker: permite usar Escucha sin conexión tras la primera visita.
+// Instalación: guarda todos los archivos de la compilación.
 // Navegación: primero red, después caché. Recursos estáticos: primero caché.
 
-const CACHE = 'escucha-v1';
+// scripts/precache-sw.mjs sustituye la versión y la lista al compilar.
+const CACHE = 'escucha-dev';
+const PRECACHE = [/* __PRECACHE__ */];
 
-self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches
+      .open(CACHE)
+      // `reload` evita la caché HTTP de GitHub Pages: el índice y los recursos llegan de la misma versión.
+      .then((cache) => cache.addAll(PRECACHE.map((url) => new Request(url, { cache: 'reload' }))))
+      .then(() => self.skipWaiting()),
+  );
+});
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
@@ -22,8 +33,12 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE).then((cache) => cache.put('./', copy));
+          // Solo una respuesta correcta de la propia app sustituye la copia sin conexión.
+          const isShell = new URL(request.url).pathname === new URL('./', self.location).pathname;
+          if (response.ok && isShell) {
+            const copy = response.clone();
+            event.waitUntil(caches.open(CACHE).then((cache) => cache.put('./', copy)));
+          }
           return response;
         })
         .catch(() => caches.match('./').then((cached) => cached ?? Response.error())),

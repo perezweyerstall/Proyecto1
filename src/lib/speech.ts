@@ -242,10 +242,12 @@ export class SpeechEngine {
     };
     utterance.onerror = (event) => {
       if (token !== this.token) return;
-      if (event.error === 'interrupted' || event.error === 'canceled') return;
+      // halt() suelta los manejadores antes de cancelar: estos códigos llegan de fuera.
+      // Chrome para Android corta la voz al apagar la pantalla o pasar a segundo plano.
+      const external = event.error === 'interrupted' || event.error === 'canceled';
       this.halt();
       this.set({ ...this.snapshot, status: 'paused' });
-      this.onError?.(event.error);
+      if (!external) this.onError?.(event.error);
     };
 
     this.current = utterance;
