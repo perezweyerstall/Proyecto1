@@ -157,3 +157,13 @@ describe('voces e idioma', () => {
     expect(detectLanguage('xyz')).toBeNull();
   });
 });
+
+describe('prime', () => {
+  it('lanza una locución silenciosa sin cambiar el estado', () => {
+    const { synth, engine } = setup();
+    engine.prime();
+    expect(synth.last.text).toBe(' ');
+    expect((synth.last as unknown as { volume: number }).volume).toBe(0);
+    expect(engine.getSnapshot().status).toBe('idle');
+  });
+});

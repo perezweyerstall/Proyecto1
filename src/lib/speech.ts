@@ -88,6 +88,17 @@ export class SpeechEngine {
     this.set({ status: 'idle', sentence: index, word: null, offset: clamped });
   }
 
+  /**
+   * Desbloquea la voz en Safari para iOS.
+   * Safari exige la primera locución dentro de un gesto del usuario.
+   * Llamar de forma síncrona en un clic que inicia la lectura tras una espera.
+   */
+  prime(): void {
+    const utterance = this.deps.createUtterance(' ');
+    utterance.volume = 0;
+    this.deps.synth.speak(utterance);
+  }
+
   /** Descarga el documento y detiene la voz. */
   unload(): void {
     this.halt();

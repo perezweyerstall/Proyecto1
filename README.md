@@ -44,7 +44,18 @@ npm run build      # comprobación de tipos y compilación en dist/
 npm run preview    # sirve la compilación
 ```
 
-`dist/` es estático. Funciona en cualquier hosting estático, como GitHub Pages.
+`dist/` es estático. Funciona en cualquier hosting estático.
+
+## Publicación
+
+La app se publica en GitHub Pages: https://perezweyerstall.github.io/Proyecto1/
+
+- `.github/workflows/deploy.yml` compila, prueba y publica la app.
+- Cada cambio en la rama `main` publica una versión nueva.
+- Para publicar a mano, abre la pestaña Actions y ejecuta «Publicar en GitHub Pages».
+- Configuración necesaria: Settings → Pages → Source: GitHub Actions.
+
+Cada dispositivo guarda su propia biblioteca. Los documentos no se sincronizan entre dispositivos.
 
 ## Estructura
 

@@ -75,7 +75,11 @@ export function Home() {
             aria-label={playing ? 'Pausar' : `Reproducir ${current.title}`}
             onClick={async () => {
               if (!engine) return navigate({ name: 'reader', id: current.id });
-              if (!isLoaded && !(await open(current.id))) return;
+              if (!isLoaded) {
+                // La carga es asíncrona: se desbloquea la voz mientras dura el gesto.
+                engine.prime();
+                if (!(await open(current.id))) return;
+              }
               engine.toggle();
             }}
           >
