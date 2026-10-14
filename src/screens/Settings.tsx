@@ -1,10 +1,11 @@
 // Ajustes: apariencia, voz, lectura y datos.
 
-import { type CSSProperties, type ReactNode, useState } from 'react';
+import { type CSSProperties, type ReactNode, useEffect, useState } from 'react';
 import { Button, Dialog, Icon, Segmented, Slider, Switch } from '../components/ui';
 import type { IconName } from '../components/icons';
+import { AccessCodeDialog, UsageMeter, VoicePicker, cloudVoiceLabel } from '../player/CloudVoiceSheet';
 import { SpeedSheet, formatRate } from '../player/SpeedSheet';
-import { VoiceSheet, describeVoice } from '../player/VoiceSheet';
+import { describeVoice } from '../player/VoiceSheet';
 import { usePlayer } from '../player/PlayerContext';
 import { useLibrary, useNotify, useSettings } from '../state/AppState';
 import type { ReaderFont, ThemeMode } from '../state/settings';
@@ -50,17 +51,23 @@ function Row({
 
 export function Settings() {
   const { settings, update } = useSettings();
-  const { voices, voice, engine, doc, close } = usePlayer();
+  const { voices, voice, close, cloud, cloudAvailable, usage, refreshUsage } = usePlayer();
   const { clear, docs } = useLibrary();
   const notify = useNotify();
-  const [sheet, setSheet] = useState<'speed' | 'voice' | 'clear' | null>(null);
+  const [sheet, setSheet] = useState<'speed' | 'voice' | 'code' | 'clear' | null>(null);
+
+  // Consulta el uso gratuito del mes al abrir Ajustes.
+  useEffect(() => {
+    if (cloud && settings.accessCode) void refreshUsage();
+  }, [cloud, settings.accessCode, refreshUsage]);
 
   const chosen = settings.voiceURI ? voices.find((v) => v.voiceURI === settings.voiceURI) : undefined;
-  const voiceLabel = settings.voiceURI
+  const deviceVoiceLabel = settings.voiceURI
     ? chosen
       ? describeVoice(chosen).name
       : 'No disponible en este dispositivo'
     : `Automática${voice ? ` · ${describeVoice(voice).name}` : ''}`;
+  const voiceLabel = cloud ? cloudVoiceLabel(settings.cloudVoice) : deviceVoiceLabel;
 
   return (
     <div className="page">
@@ -125,15 +132,51 @@ export function Settings() {
         <h2 id="s-voice" className="list-subheader">
           Voz
         </h2>
-        <ul className="list settings-card">
-          <Row icon="record_voice_over" headline="Voz" supporting={voiceLabel} onClick={() => setSheet('voice')} />
-          <Row
-            icon="speed"
-            headline="Velocidad"
-            supporting={formatRate(settings.rate)}
-            onClick={() => setSheet('speed')}
-          />
-        </ul>
+        <div className="settings-card">
+          <ul className="list">
+            {cloudAvailable && (
+              <Row
+                icon="auto_stories"
+                headline="Voz natural de Google"
+                supporting={
+                  cloud ? 'Español latino, igual en todos tus dispositivos' : 'Desactivada: suena la voz del dispositivo'
+                }
+                trailing={
+                  <Switch
+                    label="Voz natural de Google"
+                    checked={settings.voiceSource === 'cloud'}
+                    onChange={(on) => update({ voiceSource: on ? 'cloud' : 'device' })}
+                  />
+                }
+              />
+            )}
+            <Row icon="record_voice_over" headline="Voz" supporting={voiceLabel} onClick={() => setSheet('voice')} />
+            {cloud && (
+              <Row
+                icon="keyboard"
+                headline="Código de acceso"
+                supporting={
+                  settings.accessCode ? 'Guardado en este dispositivo' : 'Falta: escríbelo para usar la voz natural'
+                }
+                onClick={() => setSheet('code')}
+              />
+            )}
+            <Row
+              icon="speed"
+              headline="Velocidad"
+              supporting={
+                cloud ? `${formatRate(settings.rate)} · no cambia el uso gratuito` : formatRate(settings.rate)
+              }
+              onClick={() => setSheet('speed')}
+            />
+          </ul>
+          {cloud && settings.accessCode && (
+            <div className="settings-block settings-block--divided">
+              <span className="body-large">Uso gratuito de este mes</span>
+              <UsageMeter usage={usage} />
+            </div>
+          )}
+        </div>
       </section>
 
       <section className="settings-group" aria-labelledby="s-reading">
@@ -217,8 +260,12 @@ export function Settings() {
           />
           <Row
             icon="info"
-            headline="Escucha 0.1.0"
-            supporting="Usa las voces de tu dispositivo. Tus documentos no salen de este navegador."
+            headline="Escucha 0.2.0"
+            supporting={
+              cloudAvailable
+                ? 'Tus documentos se guardan en este navegador. La voz natural envía a Google el texto de cada frase.'
+                : 'Usa las voces de tu dispositivo. Tus documentos no salen de este navegador.'
+            }
           />
           <Row
             icon="keyboard"
@@ -233,18 +280,10 @@ export function Settings() {
         rate={settings.rate}
         onChange={(rate) => update({ rate })}
         onClose={() => setSheet(null)}
+        note={cloud ? 'La velocidad no cambia el uso gratuito.' : undefined}
       />
-      <VoiceSheet
-        open={sheet === 'voice'}
-        voices={voices}
-        selectedURI={settings.voiceURI}
-        activeVoice={voice}
-        preferredLang={doc?.lang ?? navigator.language}
-        rate={settings.rate}
-        onSelect={(voiceURI) => update({ voiceURI })}
-        onBeforePreview={() => engine?.pause()}
-        onClose={() => setSheet(null)}
-      />
+      <VoicePicker open={sheet === 'voice'} onClose={() => setSheet(null)} />
+      <AccessCodeDialog open={sheet === 'code'} onClose={() => setSheet(null)} />
       <Dialog
         open={sheet === 'clear'}
         onClose={() => setSheet(null)}

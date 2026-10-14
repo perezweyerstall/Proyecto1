@@ -11,14 +11,28 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
+import { createClipCache } from '../lib/audioCache';
+import { AudioEngine } from '../lib/audioEngine';
+import { TTS_URL, type TtsClient, type Usage, createTtsClient, formatResetDate } from '../lib/cloudVoice';
 import * as db from '../lib/db';
-import { type EngineSnapshot, type PlaybackStatus, SpeechEngine, pickVoice } from '../lib/speech';
+import type { EngineSnapshot, PlaybackEngine, PlaybackStatus } from '../lib/engine';
+import { SpeechEngine, pickVoice } from '../lib/speech';
 import { type Segmented, segment } from '../lib/text';
 import { useLibrary, useNotify, useSettings } from '../state/AppState';
+import { navigate } from '../state/router';
 
 interface PlayerValue {
   supported: boolean;
-  engine: SpeechEngine | null;
+  engine: PlaybackEngine | null;
+  /** La voz natural en la nube está activa. */
+  cloud: boolean;
+  /** La app se publicó con servidor de voz natural. */
+  cloudAvailable: boolean;
+  /** Cliente del servidor de voz, o `null` sin servidor. */
+  client: TtsClient | null;
+  /** Uso gratuito del mes, según la última respuesta del servidor. */
+  usage: Usage | null;
+  refreshUsage: () => Promise<Usage | null>;
   doc: db.DocMeta | null;
   segmented: Segmented | null;
   voices: SpeechSynthesisVoice[];
@@ -42,9 +56,18 @@ const ERROR_MESSAGES: Record<string, string> = {
   'language-unavailable': 'La voz no admite este idioma.',
   'voice-unavailable': 'La voz elegida no está disponible.',
   'not-allowed': 'El navegador bloqueó la reproducción. Pulsa reproducir de nuevo.',
+  playback: 'No se pudo reproducir el audio. Inténtalo de nuevo.',
+  offline: 'Sin conexión. Solo suenan las frases ya escuchadas.',
+  server: 'El servidor de voz no respondió. Inténtalo de nuevo.',
+  'not-configured': 'El servidor de voz aún no está configurado.',
+  'missing-code': 'Escribe el código de acceso en Ajustes para usar la voz natural.',
+  unauthorized: 'El código de acceso no es correcto. Revísalo en Ajustes.',
 };
 
-function createEngine(): SpeechEngine | null {
+/** Errores que se resuelven en Ajustes. */
+const SETTINGS_ERRORS = new Set(['missing-code', 'unauthorized']);
+
+function createDeviceEngine(): SpeechEngine | null {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
   return new SpeechEngine({
     synth: window.speechSynthesis,
@@ -84,15 +107,62 @@ function useVoices(): SpeechSynthesisVoice[] {
 }
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
-  const [engine] = useState(createEngine);
   const voices = useVoices();
   const { settings } = useSettings();
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const { docs, patchLocal, recordListening } = useLibrary();
   const notify = useNotify();
   const [doc, setDoc] = useState<db.DocMeta | null>(null);
   const [segmented, setSegmented] = useState<Segmented | null>(null);
   const docRef = useRef<db.DocMeta | null>(null);
   docRef.current = doc;
+  const [usage, setUsage] = useState<Usage | null>(null);
+  const usageRef = useRef<Usage | null>(null);
+  usageRef.current = usage;
+
+  // Dos motores: voz natural en la nube y voz del dispositivo. Se crean una sola vez.
+  const [engines] = useState(() => {
+    const client = TTS_URL
+      ? createTtsClient({ baseUrl: TTS_URL, getCode: () => settingsRef.current.accessCode, onUsage: setUsage })
+      : null;
+    const cloud = client
+      ? new AudioEngine(
+          {
+            client,
+            cache: createClipCache(),
+            createAudio: () => new Audio(),
+            createObjectURL: (blob) => URL.createObjectURL(blob),
+            revokeObjectURL: (url) => URL.revokeObjectURL(url),
+          },
+          settings.cloudVoice,
+        )
+      : null;
+    return { client, cloud, device: createDeviceEngine() };
+  });
+  const cloudActive = engines.cloud !== null && settings.voiceSource === 'cloud';
+  const engine: PlaybackEngine | null = cloudActive ? engines.cloud : engines.device;
+
+  // Al cambiar de motor, el documento pasa al nuevo en la misma posición.
+  const previousEngine = useRef<PlaybackEngine | null>(engine);
+  useEffect(() => {
+    const previous = previousEngine.current;
+    previousEngine.current = engine;
+    if (!previous || previous === engine) return;
+    const seg = previous.getDocument();
+    const offset = previous.getSnapshot().offset;
+    previous.unload();
+    if (seg && engine) engine.load(seg, offset);
+  }, [engine]);
+
+  const refreshUsage = useCallback(async () => {
+    if (!engines.client) return null;
+    try {
+      return await engines.client.usage();
+    } catch {
+      return null;
+    }
+  }, [engines.client]);
 
   // Refleja cambios de la biblioteca, como un cambio de nombre.
   useEffect(() => {
@@ -111,7 +181,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [voices, settings.voiceURI, doc?.lang]);
 
   useEffect(() => engine?.setRate(settings.rate), [engine, settings.rate]);
-  useEffect(() => engine?.setVoice(voice, localeFor(doc?.lang ?? null)), [engine, voice, doc?.lang]);
+  useEffect(() => {
+    engines.device?.setVoice(voice, localeFor(doc?.lang ?? null));
+  }, [engines.device, voice, doc?.lang]);
+  useEffect(() => engines.cloud?.setVoice(settings.cloudVoice), [engines.cloud, settings.cloudVoice]);
 
   // Guarda la posición de lectura de forma periódica y al pausar.
   const lastSaved = useRef({ at: 0, offset: -1 });
@@ -147,7 +220,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const current = docRef.current;
       if (current) void savePosition(current.length, true);
     };
-    engine.onError = (code) => notify(ERROR_MESSAGES[code] ?? `Error de voz: ${code}`);
+    engine.onError = (code) => {
+      if (code === 'monthly-limit') {
+        const when = formatResetDate(usageRef.current?.resetsOn);
+        notify(`Llegaste al límite gratuito de este mes. La voz natural vuelve el ${when}.`, {
+          label: 'Ajustes',
+          onClick: () => navigate({ name: 'settings' }),
+        });
+        return;
+      }
+      const message = ERROR_MESSAGES[code] ?? `Error de voz: ${code}`;
+      if (SETTINGS_ERRORS.has(code)) {
+        notify(message, { label: 'Ajustes', onClick: () => navigate({ name: 'settings' }) });
+      } else {
+        notify(message);
+      }
+    };
     const flush = () => void savePosition(engine.getSnapshot().offset, true);
     const onVisibility = () => document.visibilityState === 'hidden' && flush();
     window.addEventListener('pagehide', flush);
@@ -193,8 +281,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   useMediaSession(engine, doc?.id ?? null, doc?.title ?? '');
 
   const value = useMemo(
-    () => ({ supported: engine !== null, engine, doc, segmented, voices, voice, open, close }),
-    [engine, doc, segmented, voices, voice, open, close],
+    () => ({
+      supported: engine !== null,
+      engine,
+      cloud: cloudActive,
+      cloudAvailable: engines.cloud !== null,
+      client: engines.client,
+      usage,
+      refreshUsage,
+      doc,
+      segmented,
+      voices,
+      voice,
+      open,
+      close,
+    }),
+    [engine, cloudActive, engines, usage, refreshUsage, doc, segmented, voices, voice, open, close],
   );
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;
 }
@@ -228,7 +330,7 @@ export function usePlaybackStatus(): PlaybackStatus {
 }
 
 /** Controles del sistema operativo: pantalla de bloqueo, auriculares y teclas multimedia. */
-function useMediaSession(engine: SpeechEngine | null, docId: string | null, title: string): void {
+function useMediaSession(engine: PlaybackEngine | null, docId: string | null, title: string): void {
   useEffect(() => {
     if (!engine || !('mediaSession' in navigator)) return;
     const session = navigator.mediaSession;

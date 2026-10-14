@@ -1,14 +1,22 @@
 // Preferencias y estadísticas de escucha en localStorage.
 
+import { DEFAULT_CLOUD_VOICE } from '../lib/cloudVoice';
 import { DEFAULT_SEED } from '../theme/color';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type ReaderFont = 'sans' | 'serif';
+/** Voz natural de Google en la nube, o voz del dispositivo. */
+export type VoiceSource = 'cloud' | 'device';
 
 export interface Settings {
   themeMode: ThemeMode;
   seedColor: string;
-  /** `null` elige la voz según el idioma del documento. */
+  voiceSource: VoiceSource;
+  /** Voz natural elegida (Chirp 3 HD, español latino). */
+  cloudVoice: string;
+  /** Código de acceso al servidor de voz. Se guarda solo en este dispositivo. */
+  accessCode: string;
+  /** Voz del dispositivo. `null` elige la voz según el idioma del documento. */
   voiceURI: string | null;
   rate: number;
   fontScale: number;
@@ -20,6 +28,9 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   themeMode: 'system',
   seedColor: DEFAULT_SEED,
+  voiceSource: 'cloud',
+  cloudVoice: DEFAULT_CLOUD_VOICE,
+  accessCode: '',
   voiceURI: null,
   rate: 1,
   fontScale: 1,

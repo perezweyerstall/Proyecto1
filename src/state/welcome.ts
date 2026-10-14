@@ -10,7 +10,7 @@ Toca cualquier frase para saltar a ella. Usa los botones de avance y retroceso p
 
 Ajusta la velocidad con el botón de velocidad. Prueba a escuchar a una vez y media o al doble. Con práctica, entenderás el texto mucho más rápido que leyendo.
 
-Elige la voz que prefieras con el botón de voz. Escucha usa las voces instaladas en tu dispositivo y en tu navegador. Las voces con la etiqueta Natural u Online suelen sonar mejor.
+Escucha lee con una voz natural de Google en español latino. Es la misma voz en todos tus dispositivos. Con el botón de voz puedes escuchar otras voces y elegir la que prefieras.
 
 Añade contenido con el botón Nuevo. Puedes pegar texto o subir archivos PDF, EPUB, Word, TXT, Markdown y HTML. También puedes arrastrar archivos a la ventana.
 

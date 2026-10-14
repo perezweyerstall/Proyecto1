@@ -1,0 +1,20 @@
+# Servidor de voz de Escucha en Cloudflare Workers (plan gratuito).
+# Secretos (no van en este archivo): GOOGLE_TTS_KEY y APP_TOKEN.
+name = "escucha-voz"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[vars]
+# Orígenes que pueden llamar al servidor desde el navegador.
+ALLOWED_ORIGINS = "https://perezweyerstall.github.io,http://localhost:5173,http://localhost:4173"
+# Límite mensual de caracteres. Google regala 1 000 000; el margen evita cualquier cobro.
+MONTHLY_LIMIT = "900000"
+
+[[durable_objects.bindings]]
+name = "USAGE"
+class_name = "UsageCounter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["UsageCounter"]

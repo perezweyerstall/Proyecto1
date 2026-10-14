@@ -1,4 +1,5 @@
 # Publica la aplicación en GitHub Pages en cada cambio de la rama main.
+# Si existen los secretos de Cloudflare y Google, publica también el servidor de voz natural.
 name: Publicar en GitHub Pages
 
 on:
@@ -16,8 +17,88 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  voice-server:
+    name: Servidor de voz (Cloudflare)
     runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      GOOGLE_TTS_KEY: ${{ secrets.GOOGLE_TTS_KEY }}
+      APP_TOKEN: ${{ secrets.APP_TOKEN }}
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Comprobar los secretos
+        id: config
+        run: |
+          missing=""
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID GOOGLE_TTS_KEY APP_TOKEN; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::notice title=Voz natural sin configurar::Faltan los secretos:$missing. La app usará la voz del dispositivo."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v5
+        if: steps.config.outputs.ready == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Instalar dependencias
+        if: steps.config.outputs.ready == 'true'
+        run: npm ci
+
+      - name: Publicar el servidor de voz
+        id: deploy
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          npx wrangler deploy 2>&1 | tee "$RUNNER_TEMP/deploy.log"
+          printf '%s' "$GOOGLE_TTS_KEY" | npx wrangler secret put GOOGLE_TTS_KEY
+          printf '%s' "$APP_TOKEN" | npx wrangler secret put APP_TOKEN
+          url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' "$RUNNER_TEMP/deploy.log" | head -n 1)
+          if [ -z "$url" ]; then
+            echo "::error title=Sin dirección del servidor::Activa el subdominio workers.dev en Cloudflare: Workers y Pages."
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Probar la voz de Google
+        if: steps.config.outputs.ready == 'true'
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          # Genera «Hola.» (5 caracteres del uso gratuito) para comprobar la clave de Google.
+          for attempt in 1 2 3 4 5; do
+            status=$(curl -sS -o "$RUNNER_TEMP/voz.bin" -w '%{http_code}' -X POST "$URL/tts" \
+              -H "X-App-Token: $APP_TOKEN" -H 'Content-Type: application/json' -d '{"text":"Hola."}' || true)
+            if [ "$status" = "200" ] && [ "$(wc -c < "$RUNNER_TEMP/voz.bin")" -gt 500 ]; then
+              echo "La voz natural funciona."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Respuesta del servidor ($status):"
+          head -c 500 "$RUNNER_TEMP/voz.bin"; echo
+          echo "::error title=La voz de Google no responde::Revisa la clave GOOGLE_TTS_KEY, la API Cloud Text-to-Speech y la facturación de Google Cloud."
+          exit 1
+
+  build:
+    needs: voice-server
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    env:
+      # Solo se conecta la voz natural si el servidor pasó la prueba con Google.
+      VITE_TTS_URL: ${{ needs.voice-server.result == 'success' && needs.voice-server.outputs.url || '' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -34,6 +115,7 @@ jobs:
 
   deploy:
     needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages

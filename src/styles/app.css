@@ -1006,3 +1006,58 @@ mark.word {
   box-shadow: var(--md-sys-elevation-2);
   transform: translateX(-50%);
 }
+
+/* ---------- Voz natural ---------- */
+.play-btn--buffering .icon {
+  opacity: 0.4;
+}
+
+.play-btn--buffering::after {
+  content: '';
+  position: absolute;
+  top: calc(50% - 24px);
+  left: calc(50% - 24px);
+  width: 48px;
+  height: 48px;
+  border: 3px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.play-btn {
+  position: relative;
+}
+
+.settings-block--divided {
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.usage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.usage__text {
+  color: var(--md-sys-color-on-surface);
+}
+
+.usage__note {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.sheet-note {
+  padding: 0 24px 8px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.field__support--error {
+  color: var(--md-sys-color-error);
+}

@@ -17,11 +17,13 @@ export function SpeedSheet({
   rate,
   onChange,
   onClose,
+  note = 'Algunas voces limitan la velocidad máxima.',
 }: {
   open: boolean;
   rate: number;
   onChange: (rate: number) => void;
   onClose: () => void;
+  note?: string;
 }) {
   const [draft, setDraft] = useState(rate);
   useEffect(() => setDraft(rate), [rate, open]);
@@ -86,7 +88,7 @@ export function SpeedSheet({
             );
           })}
         </div>
-        <p className="speed__note body-small">Algunas voces limitan la velocidad máxima.</p>
+        <p className="speed__note body-small">{note}</p>
       </div>
     </Dialog>
   );

@@ -1,19 +1,10 @@
 // Motor de lectura en voz alta sobre la Web Speech API.
 // Lee frase a frase. Resalta palabra a palabra con eventos `boundary` o con estimación temporal.
 
+import type { EngineSnapshot, PlaybackEngine } from './engine';
 import { BASE_WPM, type Range, type Segmented, sentenceAt, wordAt, wordsIn } from './text';
 
-export type PlaybackStatus = 'idle' | 'playing' | 'paused';
-
-export interface EngineSnapshot {
-  status: PlaybackStatus;
-  /** Índice de la frase actual. -1 sin documento cargado. */
-  sentence: number;
-  /** Palabra resaltada. */
-  word: Range | null;
-  /** Posición de lectura actual en caracteres. */
-  offset: number;
-}
+export type { EngineSnapshot, PlaybackStatus } from './engine';
 
 /** Subconjunto de `SpeechSynthesis` que usa el motor. Permite pruebas con dobles. */
 export interface SynthLike {
@@ -38,7 +29,7 @@ const FALLBACK_TICK_MS = 50;
 const RESTART_DEBOUNCE_MS = 200;
 const KEEPALIVE_MS = 10_000;
 
-export class SpeechEngine {
+export class SpeechEngine implements PlaybackEngine {
   private deps: EngineDeps;
   private doc: Segmented | null = null;
   private words: Range[] = [];

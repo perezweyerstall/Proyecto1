@@ -15,7 +15,8 @@ import { Button, Dialog, Icon, IconButton, OverflowMenu, Segmented, Slider, Swit
 import type { Paragraph, Range, Sentence } from '../lib/text';
 import { estimateMinutes, formatDuration } from '../lib/text';
 import { formatRate, SpeedSheet } from '../player/SpeedSheet';
-import { VoiceSheet, describeVoice } from '../player/VoiceSheet';
+import { VoicePicker, cloudVoiceLabel } from '../player/CloudVoiceSheet';
+import { describeVoice } from '../player/VoiceSheet';
 import { usePlayer, useSnapshot } from '../player/PlayerContext';
 import { useLibrary, useNotify, useSettings } from '../state/AppState';
 import { goBack, navigate } from '../state/router';
@@ -136,9 +137,10 @@ function PlayerPanel({
   /** Se llama al usar un control de reproducción. */
   onControl: () => void;
 }) {
-  const { engine, doc, segmented, voice } = usePlayer();
+  const { engine, doc, segmented, voice, cloud } = usePlayer();
   const { settings } = useSettings();
   const snapshot = useSnapshot();
+  const voiceName = cloud ? cloudVoiceLabel(settings.cloudVoice) : voice ? describeVoice(voice).name : 'ninguna';
   const [scrub, setScrub] = useState<number | null>(null);
   const length = segmented?.text.length ?? 0;
   const offset = scrub ?? snapshot.offset;
@@ -186,8 +188,11 @@ function PlayerPanel({
         />
         <button
           type="button"
-          className={`play-btn state-layer ${playing ? 'play-btn--playing' : ''}`}
+          className={`play-btn state-layer ${playing ? 'play-btn--playing' : ''} ${
+            playing && snapshot.buffering ? 'play-btn--buffering' : ''
+          }`}
           aria-label={playing ? 'Pausar' : 'Reproducir'}
+          aria-busy={playing && snapshot.buffering ? true : undefined}
           onClick={() => {
             engine?.toggle();
             onControl();
@@ -210,7 +215,7 @@ function PlayerPanel({
           type="button"
           className="player__pill state-layer"
           onClick={onVoice}
-          aria-label={`Voz: ${voice ? describeVoice(voice).name : 'ninguna'}`}
+          aria-label={`Voz: ${voiceName}`}
         >
           <Icon name="record_voice_over" size={20} />
         </button>
@@ -221,7 +226,7 @@ function PlayerPanel({
 
 export function Reader({ id }: { id: string }) {
   const player = usePlayer();
-  const { engine, segmented, doc, voices, voice, open } = player;
+  const { engine, segmented, doc, open, cloud } = player;
   const { settings, update } = useSettings();
   const { remove, rename } = useLibrary();
   const notify = useNotify();
@@ -450,18 +455,9 @@ export function Reader({ id }: { id: string }) {
         rate={settings.rate}
         onChange={(rate) => update({ rate })}
         onClose={() => setSheet(null)}
+        note={cloud ? 'La velocidad no cambia el uso gratuito.' : undefined}
       />
-      <VoiceSheet
-        open={sheet === 'voice'}
-        voices={voices}
-        selectedURI={settings.voiceURI}
-        activeVoice={voice}
-        preferredLang={doc?.lang ?? navigator.language}
-        rate={settings.rate}
-        onSelect={(voiceURI) => update({ voiceURI })}
-        onBeforePreview={() => engine?.pause()}
-        onClose={() => setSheet(null)}
-      />
+      <VoicePicker open={sheet === 'voice'} onClose={() => setSheet(null)} />
       <ReaderSettingsSheet open={sheet === 'text'} onClose={() => setSheet(null)} />
       {doc && (
         <>
