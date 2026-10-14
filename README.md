@@ -9,7 +9,8 @@ Escucha convierte cualquier texto en audio. Resalta la frase y la palabra que su
 - **Lectura sincronizada.** La frase actual se resalta. La palabra que suena se marca con el color principal.
 - **Control de reproducción.** Reproducir, pausar, frase anterior y frase siguiente. Toca una frase para saltar a ella.
 - **Velocidad.** De 0,5× a 3,5×, con atajos frecuentes y estimación de palabras por minuto.
-- **Voces.** Lista de voces del dispositivo con búsqueda, etiquetas de calidad y vista previa. Modo automático según el idioma del documento.
+- **Voz natural de Google.** Una voz Chirp 3 HD en español latino, igual en todos los dispositivos. Nunca supera el uso gratuito mensual.
+- **Voces del dispositivo.** Alternativa sin servidor: voces del sistema con búsqueda y vista previa.
 - **Importación.** Texto pegado, PDF, EPUB, Word (DOCX), TXT, Markdown y HTML. También arrastrar y soltar.
 - **Biblioteca.** Búsqueda, filtros por tipo, progreso por documento, cambio de nombre y borrado.
 - **Inicio.** Continuar escuchando, acciones rápidas y estadísticas: palabras de hoy, racha y tiempo escuchado.
@@ -57,6 +58,68 @@ La app se publica en GitHub Pages: https://perezweyerstall.github.io/Proyecto1/
 
 Cada dispositivo guarda su propia biblioteca. Los documentos no se sincronizan entre dispositivos.
 
+## Voz natural de Google
+
+La app lee con una voz de Google Cloud Text-to-Speech (Chirp 3 HD, español de Estados Unidos: español latino neutro).
+
+### Cómo funciona
+
+```
+App (GitHub Pages) → servidor de voz (Cloudflare Workers) → Google Text-to-Speech
+```
+
+- La clave de Google vive solo en Cloudflare, como secreto. Nunca aparece en el código público.
+- El servidor exige un código de acceso. Cada dispositivo lo guarda una vez en Ajustes.
+- La app genera una frase cada vez y guarda el audio en el dispositivo. Volver a escuchar no gasta cuota.
+- La velocidad se cambia en el dispositivo. No gasta cuota.
+
+### Límite gratuito garantizado
+
+Google regala 1 000 000 de caracteres al mes con Chirp 3 HD. Escucha nunca llega a esa cifra:
+
+- El servidor cuenta cada carácter enviado, espacios incluidos.
+- Reserva los caracteres **antes** de llamar a Google. Si no caben, rechaza la frase.
+- El límite es 900 000 caracteres al mes. El código impide pasar de 950 000 aunque se cambie la configuración.
+- Cuenta a la vez el mes de la hora del Pacífico y el mes UTC. Cada uno debe quedar bajo el límite.
+- Un único contador (Durable Object) atiende las peticiones en orden. Las peticiones simultáneas no lo saltan.
+- Al llegar al límite, la voz natural se detiene hasta el mes siguiente. Ajustes muestra el uso del mes.
+
+900 000 caracteres son unas 16 horas de escucha al mes.
+
+Condiciones para que la garantía se cumpla:
+
+- No uses Text-to-Speech de Google con otra app o proyecto en la misma cuenta de facturación.
+- No borres el servidor `escucha-voz` en Cloudflare a mitad de mes: el contador se borraría con él.
+
+### Configuración
+
+1. **Google Cloud.** Crea un proyecto y activa la facturación. Activa la API «Cloud Text-to-Speech». Crea una clave de API y restríngela a esa API.
+2. **Cloudflare.** Crea una cuenta gratuita. Abre «Workers y Pages» una vez para elegir el subdominio `workers.dev`. Crea un token de API con la plantilla «Edit Cloudflare Workers» y copia el ID de la cuenta.
+3. **GitHub.** En Settings → Secrets and variables → Actions, crea cuatro secretos:
+   - `CLOUDFLARE_API_TOKEN`: el token de Cloudflare.
+   - `CLOUDFLARE_ACCOUNT_ID`: el ID de la cuenta de Cloudflare.
+   - `GOOGLE_TTS_KEY`: la clave de Google.
+   - `APP_TOKEN`: un código de acceso que tú inventes.
+4. **Publicación.** Ejecuta el flujo «Publicar en GitHub Pages» en la pestaña Actions. El flujo publica el servidor, prueba la voz y publica la app.
+5. **Dispositivos.** En Ajustes → Código de acceso, escribe el valor de `APP_TOKEN`.
+
+Sin estos secretos, la app sigue funcionando con la voz del dispositivo.
+
+### Privacidad
+
+Con la voz natural, el texto de cada frase viaja a Google a través de Cloudflare para generar el audio. Los documentos completos se guardan solo en el navegador.
+
+### Desarrollo local del servidor
+
+```bash
+cd worker
+npm install
+printf 'GOOGLE_TTS_KEY=tu-clave\nAPP_TOKEN=tu-código\n' > .dev.vars
+npx wrangler dev
+```
+
+Compila la app con `VITE_TTS_URL=http://localhost:8787 npm run build` para usar ese servidor.
+
 ## Estructura
 
 ```
@@ -66,12 +129,16 @@ src/
     speech.ts       motor de voz: frase a frase, resaltado y elección de voz
     importers.ts    PDF, EPUB, DOCX, HTML, Markdown y TXT a texto
     db.ts           biblioteca en IndexedDB
+    audioEngine.ts  motor de voz natural: audio por frase, caché y resaltado estimado
+    cloudVoice.ts   cliente del servidor de voz
+    audioCache.ts   caché del audio en IndexedDB
   player/           contexto del reproductor y hojas de velocidad y voz
   screens/          Inicio, Biblioteca, Lector, Ajustes y diálogos
   components/       componentes Material 3 e iconos
   state/            preferencias, biblioteca, avisos y rutas
   theme/color.ts    color dinámico Material 3
   styles/           tokens, base, componentes y pantallas
+worker/             servidor de voz en Cloudflare Workers con límite mensual
 tests/              pruebas con Vitest
 scripts/gen-icons.mjs  genera src/components/icons.ts
 ```
@@ -85,7 +152,7 @@ scripts/gen-icons.mjs  genera src/components/icons.ts
 
 ## Diferencias con Speechify
 
-- Las voces dependen del dispositivo y del navegador. No hay voces premium en la nube.
+- La voz natural tiene un límite gratuito de unas 16 horas al mes.
 - No hay reconocimiento de texto en imágenes (OCR).
 - No hay importación desde URL. Copia el texto de la página y pégalo.
 - No hay sincronización entre dispositivos.
