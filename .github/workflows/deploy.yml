@@ -86,7 +86,7 @@ jobs:
               echo "::error title=Falta el subdominio workers.dev::Abre Workers y Pages en Cloudflare una vez y elige un subdominio."
             elif grep -qiE 'invalid account id|could not route|code: 7003' "$log"; then
               echo "::error title=CLOUDFLARE_ACCOUNT_ID no corresponde a ninguna cuenta::Copia el «Account ID» de Cloudflare en Workers y Pages. No uses el «Zone ID»."
-            elif grep -qiE 'authentication error|unable to authenticate|invalid api token|code: 1000[01]|code: 9109' "$log"; then
+            elif grep -qiE 'authentication (error|failed)|unable to authenticate|invalid (api|access) token|authorization header|code: (1000[01]|9106|9109|6003|6111)' "$log"; then
               echo "::error title=El token de Cloudflare no sirve::Crea un token con la plantilla «Edit Cloudflare Workers» en la misma cuenta. Guárdalo en CLOUDFLARE_API_TOKEN."
             else
               echo "::error title=No se pudo publicar el servidor::Revisa CLOUDFLARE_API_TOKEN (plantilla Edit Cloudflare Workers) y CLOUDFLARE_ACCOUNT_ID."
@@ -100,7 +100,7 @@ jobs:
               exit 1
             fi
           done
-          url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' "$log" | head -n 1)
+          url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' "$log" | head -n 1 || true)
           if [ -z "$url" ]; then
             echo "::error title=Sin dirección del servidor::Activa el subdominio workers.dev en Cloudflare: Workers y Pages."
             exit 1
