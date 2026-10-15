@@ -28,6 +28,7 @@ export type TtsErrorCode =
   | 'missing-code'
   | 'unauthorized'
   | 'monthly-limit'
+  | 'rate-limit'
   | 'offline'
   | 'server';
 
@@ -98,6 +99,7 @@ export function createTtsClient({ baseUrl, getCode, onUsage, fetchImpl }: Client
       // Respuesta sin JSON.
     }
     if (response.status === 401) throw new TtsError('unauthorized');
+    if (body.error === 'rate-limit') throw new TtsError('rate-limit');
     if (response.status === 429 || body.error === 'monthly-limit') throw new TtsError('monthly-limit', body.resetsOn);
     if (response.status === 503 && body.error === 'not-configured') throw new TtsError('not-configured');
     throw new TtsError('server');
@@ -123,10 +125,10 @@ export function createTtsClient({ baseUrl, getCode, onUsage, fetchImpl }: Client
   };
 }
 
-/** Fecha de renovación legible: «1 de noviembre». */
+/** Fecha de renovación legible, con artículo: «el 1 de noviembre» o «el próximo mes». */
 export function formatResetDate(resetsOn: string | undefined): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(resetsOn ?? '');
   if (!match) return 'el próximo mes';
   const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  return date.toLocaleDateString('es', { day: 'numeric', month: 'long' });
+  return `el ${date.toLocaleDateString('es', { day: 'numeric', month: 'long' })}`;
 }

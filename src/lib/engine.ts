@@ -36,5 +36,6 @@ export interface PlaybackEngine {
   prime(): void;
   onSentenceDone: ((words: number) => void) | null;
   onEnded: (() => void) | null;
-  onError: ((code: string) => void) | null;
+  /** `detail` lleva datos del error, como la fecha de renovación del uso gratuito. */
+  onError: ((code: string, detail?: string) => void) | null;
 }

@@ -8,10 +8,12 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import {
+  type Bucket,
   MAX_TEXT,
   QuotaLedger,
-  type Reservation,
+  type ReserveResult,
   billedChars,
+  buckets,
   monthKeys,
   resetDate,
   resolveLimit,
@@ -40,10 +42,12 @@ export const VOICES = [
 /** Contador global del mes. Un único objeto: todas las peticiones pasan en orden. */
 export class UsageCounter extends DurableObject<Env> {
   private ledger: QuotaLedger;
+  private sql: SqlStorage;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     const sql = ctx.storage.sql;
+    this.sql = sql;
     sql.exec('CREATE TABLE IF NOT EXISTS usage (month TEXT PRIMARY KEY, chars INTEGER NOT NULL)');
     this.ledger = new QuotaLedger({
       get: (key) => {
@@ -60,12 +64,15 @@ export class UsageCounter extends DurableObject<Env> {
     });
   }
 
-  reserve(keys: string[], chars: number, limit: number): Reservation {
-    return this.ledger.reserve(keys, chars, limit);
+  reserve(entries: Bucket[], chars: number): ReserveResult {
+    // Borra los contadores de minutos anteriores: solo cuenta el minuto en curso.
+    const minute = entries.find((e) => e.key.startsWith('min:'));
+    if (minute) this.sql.exec("DELETE FROM usage WHERE month LIKE 'min:%' AND month <> ?", minute.key);
+    return this.ledger.reserve(entries, chars);
   }
 
-  release(keys: string[], chars: number): number {
-    return this.ledger.release(keys, chars);
+  release(entries: Bucket[], chars: number): number {
+    return this.ledger.release(entries, chars);
   }
 
   usage(keys: string[]): number {
@@ -132,6 +139,7 @@ export default {
     const now = new Date();
     const keys = monthKeys(now);
     const limit = resolveLimit(env.MONTHLY_LIMIT);
+    const entries = buckets(now, limit);
     const resetsOn = resetDate(now);
     const counter = env.USAGE.get(env.USAGE.idFromName('global'));
     const usageHeaders = (used: number) => ({
@@ -162,11 +170,18 @@ export default {
     }
     const voiceName = VOICES.includes(voice as (typeof VOICES)[number]) ? (voice as string) : VOICES[0];
 
+    // Solo el servidor publicado llama a Google de verdad: su contador es el único que cuenta.
+    // Un servidor local (wrangler dev) tendría otro contador y podría superar el uso gratuito.
+    if (!env.GOOGLE_TTS_ENDPOINT && !url.hostname.endsWith('.workers.dev')) {
+      return json({ error: 'not-configured' }, 503, cors);
+    }
+
     // Reserva antes de llamar a Google: así nunca se supera el límite, ni con peticiones simultáneas.
     const chars = billedChars(text);
-    const reservation = await counter.reserve(keys, chars, limit);
+    const reservation = await counter.reserve(entries, chars);
     if (!reservation.ok) {
-      return json({ error: 'monthly-limit', used: reservation.used, limit, resetsOn }, 429, usageHeaders(reservation.used));
+      const error = reservation.blockedBy === 'minute' ? 'rate-limit' : 'monthly-limit';
+      return json({ error, used: reservation.used, limit, resetsOn }, 429, usageHeaders(reservation.used));
     }
 
     let upstream: Response;
@@ -190,7 +205,7 @@ export default {
       const detail = await upstream.text().catch(() => '');
       console.error('Google TTS', upstream.status, detail.slice(0, 500));
       // Un 4xx es un rechazo sin coste: se devuelve la reserva. Un 5xx es incierto: se mantiene.
-      const used = upstream.status < 500 ? await counter.release(keys, chars) : reservation.used;
+      const used = upstream.status < 500 ? await counter.release(entries, chars) : reservation.used;
       return json({ error: 'upstream', status: upstream.status }, 502, usageHeaders(used));
     }
 

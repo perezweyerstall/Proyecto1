@@ -3,8 +3,11 @@ import {
   DEFAULT_LIMIT,
   GOOGLE_FREE_CHARS,
   HARD_MAX_LIMIT,
+  MINUTE_LIMIT,
   QuotaLedger,
   billedChars,
+  buckets,
+  minuteKey,
   monthKeys,
   resetDate,
   resolveLimit,
@@ -37,24 +40,38 @@ describe('límite mensual del servidor de voz', () => {
     expect(resetDate(new Date(Date.UTC(2026, 11, 20)))).toBe('2027-01-01');
   });
 
+  const months = (keys: string[], limit: number) => keys.map((key) => ({ key, limit }));
+
   it('reserva en todos los meses o en ninguno', () => {
     const l = ledger();
-    const october = ['pt:2026-10', 'utc:2026-10'];
-    const boundary = ['pt:2026-10', 'utc:2026-11'];
-    expect(l.reserve(october, 80, 100)).toEqual({ ok: true, used: 80 });
+    const october = months(['pt:2026-10', 'utc:2026-10'], 100);
+    const boundary = months(['pt:2026-10', 'utc:2026-11'], 100);
+    expect(l.reserve(october, 80)).toEqual({ ok: true, used: 80 });
     // En el cambio de mes UTC, el mes del Pacífico sigue lleno: se rechaza.
-    expect(l.reserve(boundary, 30, 100)).toEqual({ ok: false, used: 80 });
-    expect(l.reserve(boundary, 20, 100)).toEqual({ ok: true, used: 100 });
-    expect(l.reserve(boundary, 1, 100).ok).toBe(false);
+    expect(l.reserve(boundary, 30)).toMatchObject({ ok: false, used: 80, blockedBy: 'month' });
+    expect(l.reserve(boundary, 20)).toEqual({ ok: true, used: 100 });
+    expect(l.reserve(boundary, 1).ok).toBe(false);
     expect(l.usage(['pt:2026-11', 'utc:2026-11'])).toBe(20);
+  });
+
+  it('frena el ritmo por minuto sin gastar el mes', () => {
+    const l = ledger();
+    const now = new Date(Date.UTC(2026, 9, 14, 10, 30, 15));
+    expect(minuteKey(now)).toBe('min:2026-10-14T10:30');
+    const entries = buckets(now, 900_000);
+    expect(l.reserve(entries, MINUTE_LIMIT).ok).toBe(true);
+    expect(l.reserve(entries, 1)).toMatchObject({ ok: false, blockedBy: 'minute' });
+    // El minuto siguiente vuelve a admitir texto.
+    expect(l.reserve(buckets(new Date(Date.UTC(2026, 9, 14, 10, 31)), 900_000), 10).ok).toBe(true);
+    expect(l.usage(monthKeys(now))).toBe(MINUTE_LIMIT + 10);
   });
 
   it('devuelve las reservas rechazadas por Google sin bajar de cero', () => {
     const l = ledger();
-    const keys = ['pt:2026-10', 'utc:2026-10'];
-    l.reserve(keys, 50, 100);
+    const keys = months(['pt:2026-10', 'utc:2026-10'], 100);
+    l.reserve(keys, 50);
     expect(l.release(keys, 20)).toBe(30);
     expect(l.release(keys, 100)).toBe(0);
-    expect(l.reserve(keys, 0, 100).ok).toBe(false);
+    expect(l.reserve(keys, 0).ok).toBe(false);
   });
 });

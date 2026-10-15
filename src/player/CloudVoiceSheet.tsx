@@ -22,9 +22,21 @@ function usePreview() {
   const { client, engine } = usePlayer();
   const notify = useNotify();
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const urlRef = useRef<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
 
-  useEffect(() => () => audioRef.current?.pause(), []);
+  const releaseUrl = () => {
+    if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    urlRef.current = null;
+  };
+
+  useEffect(
+    () => () => {
+      audioRef.current?.pause();
+      releaseUrl();
+    },
+    [],
+  );
 
   return {
     loading,
@@ -33,6 +45,7 @@ function usePreview() {
       engine?.pause();
       // El elemento se crea y se activa dentro del toque: Safari lo exige.
       audioRef.current?.pause();
+      releaseUrl();
       const audio = new Audio(SILENCE);
       audioRef.current = audio;
       audio.play().catch(() => {});
@@ -45,7 +58,8 @@ function usePreview() {
           void previewCache.put(key, blob);
         }
         if (audioRef.current !== audio) return;
-        audio.src = URL.createObjectURL(blob);
+        urlRef.current = URL.createObjectURL(blob);
+        audio.src = urlRef.current;
         await audio.play();
       } catch (error) {
         const code = error instanceof TtsError ? error.code : 'server';
@@ -151,26 +165,30 @@ export function AccessCodeDialog({ open, onClose }: { open: boolean; onClose: ()
 
   const save = async () => {
     const value = code.trim();
-    update({ accessCode: value });
     if (!client || !value) {
+      update({ accessCode: value });
       onClose();
       return;
     }
     setChecking(true);
     try {
       await client.usage(value);
+      update({ accessCode: value });
       notify('Código correcto. La voz natural está lista.');
       onClose();
+      void refreshUsage();
     } catch (err) {
       const codeError = err instanceof TtsError ? err.code : 'server';
-      if (codeError === 'unauthorized') setError('Código incorrecto. Revísalo e inténtalo de nuevo.');
-      else {
+      if (codeError === 'unauthorized') {
+        setError('Código incorrecto. Revísalo e inténtalo de nuevo.');
+      } else {
+        // Sin conexión o servidor caído: se guarda y se comprobará al reproducir.
+        update({ accessCode: value });
         notify('Código guardado. No se pudo comprobar ahora.');
         onClose();
       }
     } finally {
       setChecking(false);
-      void refreshUsage();
     }
   };
 
@@ -227,9 +245,15 @@ export function AccessCodeDialog({ open, onClose }: { open: boolean; onClose: ()
   );
 }
 
-export function UsageMeter({ usage }: { usage: Usage | null }) {
+export function UsageMeter({ usage, failed = false }: { usage: Usage | null; failed?: boolean }) {
   if (!usage) {
-    return <p className="body-medium usage__text">Consultando el uso gratuito del mes…</p>;
+    return (
+      <p className="body-medium usage__text">
+        {failed
+          ? 'No se pudo consultar el uso. Revisa la conexión o el código de acceso.'
+          : 'Consultando el uso gratuito del mes…'}
+      </p>
+    );
   }
   const ratio = usage.limit > 0 ? usage.used / usage.limit : 0;
   const remainingMinutes = Math.max(0, Math.floor((usage.limit - usage.used) / 900));
@@ -241,7 +265,7 @@ export function UsageMeter({ usage }: { usage: Usage | null }) {
         {numberFormat.format(remainingMinutes)} minutos de escucha
       </p>
       <p className="body-small usage__note">
-        Se renueva el {formatResetDate(usage.resetsOn)}. Al llegar al límite, la voz natural se detiene hasta
+        Se renueva {formatResetDate(usage.resetsOn)}. Al llegar al límite, la voz natural se detiene hasta
         entonces. Nunca se cobra nada.
       </p>
     </div>

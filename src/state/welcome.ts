@@ -10,7 +10,7 @@ Toca cualquier frase para saltar a ella. Usa los botones de avance y retroceso p
 
 Ajusta la velocidad con el botón de velocidad. Prueba a escuchar a una vez y media o al doble. Con práctica, entenderás el texto mucho más rápido que leyendo.
 
-Escucha lee con una voz natural de Google en español latino. Es la misma voz en todos tus dispositivos. Con el botón de voz puedes escuchar otras voces y elegir la que prefieras.
+Con el botón de voz eliges cómo suena la lectura. Si la voz natural de Google está activada en Ajustes, escucharás la misma voz en español latino en todos tus dispositivos.
 
 Añade contenido con el botón Nuevo. Puedes pegar texto o subir archivos PDF, EPUB, Word, TXT, Markdown y HTML. También puedes arrastrar archivos a la ventana.
 

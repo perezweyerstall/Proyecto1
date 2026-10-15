@@ -16,7 +16,44 @@ export interface AudioEngineDeps {
   revokeObjectURL: (url: string) => void;
   /** Programa el avance del resaltado. Por defecto, requestAnimationFrame o un intervalo. */
   schedule?: (fn: () => void) => () => void;
+  /**
+   * Mantiene la sesión multimedia con un bucle de silencio largo.
+   * Chrome para Android trata los clips de 5 s o menos como sonidos breves:
+   * sin el bucle, los controles de la pantalla de bloqueo desaparecen entre frases.
+   */
+  keepSession?: boolean;
+  /** Espera antes de pedir una frase nueva al servidor. Evita gastar cuota al saltar frases seguidas. */
+  requestDelayMs?: number;
 }
+
+/** Bucle de silencio de 6 s en WAV, creado en el dispositivo para no engordar la app. */
+function silentLoop(createObjectURL: (blob: Blob) => string, seconds = 6): string {
+  const rate = 8000;
+  const samples = rate * seconds;
+  const buffer = new ArrayBuffer(44 + samples);
+  const view = new DataView(buffer);
+  const ascii = (offset: number, text: string) => {
+    for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  ascii(0, 'RIFF');
+  view.setUint32(4, 36 + samples, true);
+  ascii(8, 'WAVE');
+  ascii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate, true);
+  view.setUint16(32, 1, true);
+  view.setUint16(34, 8, true);
+  ascii(36, 'data');
+  view.setUint32(40, samples, true);
+  new Uint8Array(buffer, 44).fill(128);
+  return createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+}
+
+/** Petición anulada porque el usuario ya pasó a otra frase. */
+class Superseded extends Error {}
 
 /** 50 ms de silencio en WAV. Reproducirlo dentro de un toque desbloquea el audio en Safari para iOS. */
 export const SILENCE =
@@ -111,7 +148,8 @@ export class AudioEngine implements PlaybackEngine {
 
   onSentenceDone: ((words: number) => void) | null = null;
   onEnded: (() => void) | null = null;
-  onError: ((code: string) => void) | null = null;
+  onError: ((code: string, detail?: string) => void) | null = null;
+  private keeper: HTMLAudioElement | null = null;
 
   constructor(deps: AudioEngineDeps, voice: string) {
     this.deps = deps;
@@ -151,6 +189,12 @@ export class AudioEngine implements PlaybackEngine {
 
   prime(): void {
     const audio = this.element();
+    if (this.deps.keepSession && !this.keeper) {
+      const keeper = this.deps.createAudio();
+      keeper.loop = true;
+      keeper.src = silentLoop(this.deps.createObjectURL);
+      this.keeper = keeper;
+    }
     if (this.unlocked) return;
     this.unlocked = true;
     audio.onended = null;
@@ -206,7 +250,8 @@ export class AudioEngine implements PlaybackEngine {
       this.speakFrom(index, start);
     } else {
       this.halt();
-      if (this.loaded?.sentence !== index) this.loaded = null;
+      // Sin clip cargado, play() empieza en la palabra pedida. El audio sigue en la caché.
+      this.dropLoaded();
       this.set({ ...this.snapshot, sentence: index, word: null, offset: start, buffering: false });
     }
   }
@@ -245,7 +290,7 @@ export class AudioEngine implements PlaybackEngine {
     if (this.snapshot.status === 'playing') this.speakFrom(this.snapshot.sentence, this.snapshot.offset);
     else {
       this.halt();
-      this.loaded = null;
+      this.dropLoaded();
     }
   }
 
@@ -256,8 +301,24 @@ export class AudioEngine implements PlaybackEngine {
 
   private element(): HTMLAudioElement {
     if (!this.audio) {
-      this.audio = this.deps.createAudio();
-      this.audio.preload = 'auto';
+      const audio = this.deps.createAudio();
+      audio.preload = 'auto';
+      // El sistema puede pausar el audio: auriculares desconectados, Bluetooth, llamadas.
+      // Al final de cada frase también llega 'pause', pero con `ended` activo.
+      audio.addEventListener('pause', () => {
+        if (audio.ended || this.snapshot.status !== 'playing' || this.snapshot.buffering) return;
+        if (!this.loaded || audio.src !== this.loaded.url) return;
+        this.stopTicker?.();
+        this.stopTicker = null;
+        // Se conserva el token: si el sistema reanuda, la frase sigue y encadena la siguiente.
+        this.set({ ...this.snapshot, status: 'paused' });
+      });
+      audio.addEventListener('play', () => {
+        if (this.snapshot.status !== 'paused' || !this.loaded || audio.src !== this.loaded.url) return;
+        this.set({ ...this.snapshot, status: 'playing', buffering: false });
+        this.startTicker(this.token);
+      });
+      this.audio = audio;
     }
     return this.audio;
   }
@@ -268,20 +329,29 @@ export class AudioEngine implements PlaybackEngine {
     return doc.text.slice(sentence.start, sentence.end);
   }
 
-  /** Audio de una frase: memoria, caché del dispositivo o servidor. */
-  private clip(index: number): Promise<Blob> {
+  /**
+   * Audio de una frase: memoria, caché del dispositivo o servidor.
+   * Con `token`, espera un momento antes de pedirla al servidor y la descarta si el usuario ya pasó a otra.
+   */
+  private async clip(index: number, token?: number): Promise<Blob> {
     const text = this.textOf(index);
-    const key = clipKey(this.voice, text);
+    const voice = this.voice;
+    const key = clipKey(voice, text);
     const known = this.clips.get(key);
     if (known) return known;
-    const voice = this.voice;
-    const promise = (async () => {
-      const cached = await this.deps.cache.get(key);
-      if (cached) return cached;
-      const blob = await this.deps.client.synthesize(text, voice);
+    const cached = await this.deps.cache.get(key);
+    if (cached) return cached;
+    const delay = this.deps.requestDelayMs ?? 0;
+    if (token !== undefined && delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      if (token !== this.token) throw new Superseded();
+    }
+    const again = this.clips.get(key);
+    if (again) return again;
+    const promise = this.deps.client.synthesize(text, voice).then((blob) => {
       void this.deps.cache.put(key, blob);
       return blob;
-    })();
+    });
     this.clips.set(key, promise);
     promise.catch(() => this.clips.delete(key));
     while (this.clips.size > MEMORY_CLIPS) {
@@ -328,10 +398,10 @@ export class AudioEngine implements PlaybackEngine {
       buffering: true,
     });
 
-    this.clip(index).then(
+    this.clip(index, token).then(
       (blob) => {
         if (token !== this.token) return;
-        if (this.loaded) this.deps.revokeObjectURL(this.loaded.url);
+        this.dropLoaded();
         const url = this.deps.createObjectURL(blob);
         const timings = estimateTimings(doc.text, words, sentence.end);
         this.loaded = { sentence: index, url, timings };
@@ -344,7 +414,8 @@ export class AudioEngine implements PlaybackEngine {
           audio.addEventListener(
             'loadedmetadata',
             () => {
-              if (token !== this.token) return;
+              // Salta a la palabra pedida si este clip sigue cargado, aunque se haya pausado.
+              if (this.loaded?.url !== url) return;
               const span = spokenSpan(audio.duration);
               audio.currentTime = span.start + span.length * timings[startIndex].from;
             },
@@ -355,7 +426,7 @@ export class AudioEngine implements PlaybackEngine {
         this.prefetch(index);
       },
       (error: unknown) => {
-        if (token !== this.token) return;
+        if (token !== this.token || error instanceof Superseded) return;
         this.fail(error);
       },
     );
@@ -424,7 +495,7 @@ export class AudioEngine implements PlaybackEngine {
       return;
     }
     this.halt();
-    this.loaded = null;
+    this.dropLoaded();
     this.set({ status: 'idle', sentence: 0, word: null, offset: 0, buffering: false });
     this.onEnded?.();
   }
@@ -432,7 +503,14 @@ export class AudioEngine implements PlaybackEngine {
   private fail(error: unknown): void {
     this.halt();
     this.set({ ...this.snapshot, status: 'paused', buffering: false });
-    this.onError?.(error instanceof TtsError ? error.code : 'server');
+    if (error instanceof TtsError) this.onError?.(error.code, error.resetsOn);
+    else this.onError?.('server');
+  }
+
+  /** Suelta el clip cargado y su dirección de memoria. */
+  private dropLoaded(): void {
+    if (this.loaded) this.deps.revokeObjectURL(this.loaded.url);
+    this.loaded = null;
   }
 
   /** Invalida la reproducción en curso y detiene el audio. */
@@ -445,13 +523,18 @@ export class AudioEngine implements PlaybackEngine {
 
   /** Suelta el audio cargado y los fragmentos en memoria. */
   private release(): void {
-    if (this.loaded) this.deps.revokeObjectURL(this.loaded.url);
-    this.loaded = null;
+    this.dropLoaded();
     this.clips.clear();
   }
 
   private set(next: EngineSnapshot): void {
     this.snapshot = next;
+    // El bucle de silencio acompaña a la lectura: suena mientras se lee y para con ella.
+    const keeper = this.keeper;
+    if (keeper) {
+      if (next.status === 'playing' && keeper.paused) keeper.play().catch(() => {});
+      else if (next.status !== 'playing' && !keeper.paused) keeper.pause();
+    }
     for (const listener of this.listeners) listener(next);
   }
 }

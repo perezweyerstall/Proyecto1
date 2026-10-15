@@ -51,14 +51,17 @@ function Row({
 
 export function Settings() {
   const { settings, update } = useSettings();
-  const { voices, voice, close, cloud, cloudAvailable, usage, refreshUsage } = usePlayer();
+  const { voices, voice, close, cloud, cloudAvailable, cloudReady, usage, refreshUsage } = usePlayer();
   const { clear, docs } = useLibrary();
   const notify = useNotify();
   const [sheet, setSheet] = useState<'speed' | 'voice' | 'code' | 'clear' | null>(null);
+  const [usageFailed, setUsageFailed] = useState(false);
 
   // Consulta el uso gratuito del mes al abrir Ajustes.
   useEffect(() => {
-    if (cloud && settings.accessCode) void refreshUsage();
+    if (!cloud) return;
+    setUsageFailed(false);
+    void refreshUsage().then((result) => setUsageFailed(result === null));
   }, [cloud, settings.accessCode, refreshUsage]);
 
   const chosen = settings.voiceURI ? voices.find((v) => v.voiceURI === settings.voiceURI) : undefined;
@@ -139,7 +142,11 @@ export function Settings() {
                 icon="auto_stories"
                 headline="Voz natural de Google"
                 supporting={
-                  cloud ? 'Español latino, igual en todos tus dispositivos' : 'Desactivada: suena la voz del dispositivo'
+                  cloud
+                    ? 'Español latino, igual en todos tus dispositivos'
+                    : cloudReady
+                      ? 'Falta el código de acceso. Mientras tanto suena la voz del dispositivo'
+                      : 'Desactivada: suena la voz del dispositivo'
                 }
                 trailing={
                   <Switch
@@ -151,7 +158,7 @@ export function Settings() {
               />
             )}
             <Row icon="record_voice_over" headline="Voz" supporting={voiceLabel} onClick={() => setSheet('voice')} />
-            {cloud && (
+            {cloudReady && (
               <Row
                 icon="keyboard"
                 headline="Código de acceso"
@@ -170,10 +177,10 @@ export function Settings() {
               onClick={() => setSheet('speed')}
             />
           </ul>
-          {cloud && settings.accessCode && (
+          {cloud && (
             <div className="settings-block settings-block--divided">
               <span className="body-large">Uso gratuito de este mes</span>
-              <UsageMeter usage={usage} />
+              <UsageMeter usage={usage} failed={usageFailed && !usage} />
             </div>
           )}
         </div>

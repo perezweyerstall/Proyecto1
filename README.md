@@ -32,7 +32,7 @@ Escucha convierte cualquier texto en audio. Resalta la frase y la palabra que su
 
 ## Requisitos
 
-- Node.js 20 o superior.
+- Node.js 22 o superior.
 - Un navegador con Web Speech API: Chrome, Edge, Safari o Firefox actualizados.
 
 ## Uso
@@ -82,6 +82,8 @@ Google regala 1 000 000 de caracteres al mes con Chirp 3 HD. Escucha nunca llega
 - El límite es 900 000 caracteres al mes. El código impide pasar de 950 000 aunque se cambie la configuración.
 - Cuenta a la vez el mes de la hora del Pacífico y el mes UTC. Cada uno debe quedar bajo el límite.
 - Un único contador (Durable Object) atiende las peticiones en orden. Las peticiones simultáneas no lo saltan.
+- El servidor admite como máximo 6000 caracteres por minuto. Un código filtrado no puede vaciar el mes de golpe.
+- Solo el servidor publicado en `workers.dev` llama a Google. Un servidor local nunca usa la clave real.
 - Al llegar al límite, la voz natural se detiene hasta el mes siguiente. Ajustes muestra el uso del mes.
 
 900 000 caracteres son unas 16 horas de escucha al mes.
@@ -90,6 +92,7 @@ Condiciones para que la garantía se cumpla:
 
 - No uses Text-to-Speech de Google con otra app o proyecto en la misma cuenta de facturación.
 - No borres el servidor `escucha-voz` en Cloudflare a mitad de mes: el contador se borraría con él.
+- No uses la clave de Google fuera de este servidor. Guárdala solo como secreto en GitHub.
 
 ### Configuración
 
@@ -99,26 +102,34 @@ Condiciones para que la garantía se cumpla:
    - `CLOUDFLARE_API_TOKEN`: el token de Cloudflare.
    - `CLOUDFLARE_ACCOUNT_ID`: el ID de la cuenta de Cloudflare.
    - `GOOGLE_TTS_KEY`: la clave de Google.
-   - `APP_TOKEN`: un código de acceso que tú inventes.
+   - `APP_TOKEN`: un código de acceso largo y aleatorio, de 16 caracteres o más. Usa un generador de contraseñas. No uses palabras como «escucha», «voz» ni tu nombre.
 4. **Publicación.** Ejecuta el flujo «Publicar en GitHub Pages» en la pestaña Actions. El flujo publica el servidor, prueba la voz y publica la app.
 5. **Dispositivos.** En Ajustes → Código de acceso, escribe el valor de `APP_TOKEN`.
 
-Sin estos secretos, la app sigue funcionando con la voz del dispositivo.
+Sin estos secretos, o sin el código en un dispositivo, la app usa la voz del dispositivo.
 
 ### Privacidad
 
 Con la voz natural, el texto de cada frase viaja a Google a través de Cloudflare para generar el audio. Los documentos completos se guardan solo en el navegador.
 
-### Desarrollo local del servidor
+### Desarrollo local
+
+Para trabajar en la app con la voz natural, usa el servidor publicado. `localhost:5173` ya está autorizado:
+
+```bash
+VITE_TTS_URL=https://escucha-voz.<tu-subdominio>.workers.dev npm run dev
+```
+
+Para trabajar en el servidor, usa una clave falsa y un Google simulado. Nunca pongas la clave real en `worker/.dev.vars`:
 
 ```bash
 cd worker
 npm install
-printf 'GOOGLE_TTS_KEY=tu-clave\nAPP_TOKEN=tu-código\n' > .dev.vars
-npx wrangler dev
+printf 'GOOGLE_TTS_KEY=clave-falsa\nAPP_TOKEN=prueba\n' > .dev.vars
+npx wrangler dev --var GOOGLE_TTS_ENDPOINT:http://localhost:5099/synthesize
 ```
 
-Compila la app con `VITE_TTS_URL=http://localhost:8787 npm run build` para usar ese servidor.
+El servidor local rechaza las llamadas a Google si no tiene `GOOGLE_TTS_ENDPOINT`.
 
 ## Estructura
 

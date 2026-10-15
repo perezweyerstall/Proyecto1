@@ -16,17 +16,17 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+defaults:
+  run:
+    # `bash` explícito activa pipefail: un fallo dentro de una tubería detiene el paso.
+    shell: bash
+
 jobs:
   voice-server:
     name: Servidor de voz (Cloudflare)
     runs-on: ubuntu-latest
     outputs:
       url: ${{ steps.deploy.outputs.url }}
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      GOOGLE_TTS_KEY: ${{ secrets.GOOGLE_TTS_KEY }}
-      APP_TOKEN: ${{ secrets.APP_TOKEN }}
     defaults:
       run:
         working-directory: worker
@@ -35,11 +35,17 @@ jobs:
 
       - name: Comprobar los secretos
         id: config
+        env:
+          HAS_CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+          HAS_GOOGLE_KEY: ${{ secrets.GOOGLE_TTS_KEY != '' }}
+          HAS_APP_TOKEN: ${{ secrets.APP_TOKEN != '' }}
         run: |
           missing=""
-          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID GOOGLE_TTS_KEY APP_TOKEN; do
-            if [ -z "${!name}" ]; then missing="$missing $name"; fi
-          done
+          [ "$HAS_CF_TOKEN" = "true" ] || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ "$HAS_CF_ACCOUNT" = "true" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          [ "$HAS_GOOGLE_KEY" = "true" ] || missing="$missing GOOGLE_TTS_KEY"
+          [ "$HAS_APP_TOKEN" = "true" ] || missing="$missing APP_TOKEN"
           if [ -n "$missing" ]; then
             echo "::notice title=Voz natural sin configurar::Faltan los secretos:$missing. La app usará la voz del dispositivo."
             echo "ready=false" >> "$GITHUB_OUTPUT"
@@ -54,6 +60,7 @@ jobs:
           cache: npm
           cache-dependency-path: worker/package-lock.json
 
+      # Las dependencias se instalan sin acceso a los secretos.
       - name: Instalar dependencias
         if: steps.config.outputs.ready == 'true'
         run: npm ci
@@ -61,8 +68,22 @@ jobs:
       - name: Publicar el servidor de voz
         id: deploy
         if: steps.config.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GOOGLE_TTS_KEY: ${{ secrets.GOOGLE_TTS_KEY }}
+          APP_TOKEN: ${{ secrets.APP_TOKEN }}
         run: |
-          npx wrangler deploy 2>&1 | tee "$RUNNER_TEMP/deploy.log"
+          if ! npx wrangler deploy > "$RUNNER_TEMP/deploy.log" 2>&1; then
+            cat "$RUNNER_TEMP/deploy.log"
+            if grep -qi 'workers.dev subdomain' "$RUNNER_TEMP/deploy.log"; then
+              echo "::error title=Falta el subdominio workers.dev::Abre Workers y Pages en Cloudflare una vez y elige un subdominio."
+            else
+              echo "::error title=No se pudo publicar el servidor::Revisa CLOUDFLARE_API_TOKEN (plantilla Edit Cloudflare Workers) y CLOUDFLARE_ACCOUNT_ID."
+            fi
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/deploy.log"
           printf '%s' "$GOOGLE_TTS_KEY" | npx wrangler secret put GOOGLE_TTS_KEY
           printf '%s' "$APP_TOKEN" | npx wrangler secret put APP_TOKEN
           url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' "$RUNNER_TEMP/deploy.log" | head -n 1)
@@ -70,14 +91,22 @@ jobs:
             echo "::error title=Sin dirección del servidor::Activa el subdominio workers.dev en Cloudflare: Workers y Pages."
             exit 1
           fi
+          # GitHub descarta las salidas que contienen un secreto: el código no puede formar parte de la dirección.
+          case "$url" in
+            *"$APP_TOKEN"*)
+              echo "::error title=Código de acceso demasiado simple::APP_TOKEN aparece dentro de la dirección del servidor. Cámbialo por uno largo y aleatorio (16 caracteres o más)."
+              exit 1;;
+          esac
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Probar la voz de Google
         if: steps.config.outputs.ready == 'true'
         env:
           URL: ${{ steps.deploy.outputs.url }}
+          APP_TOKEN: ${{ secrets.APP_TOKEN }}
         run: |
           # Genera «Hola.» (5 caracteres del uso gratuito) para comprobar la clave de Google.
+          status=000
           for attempt in 1 2 3 4 5; do
             status=$(curl -sS -o "$RUNNER_TEMP/voz.bin" -w '%{http_code}' -X POST "$URL/tts" \
               -H "X-App-Token: $APP_TOKEN" -H 'Content-Type: application/json' -d '{"text":"Hola."}' || true)
@@ -85,20 +114,26 @@ jobs:
               echo "La voz natural funciona."
               exit 0
             fi
+            if [ "$status" = "429" ]; then
+              echo "::notice title=Límite gratuito alcanzado::El servidor funciona. El uso gratuito del mes está agotado o hay demasiadas peticiones."
+              exit 0
+            fi
             sleep 5
           done
           echo "Respuesta del servidor ($status):"
-          head -c 500 "$RUNNER_TEMP/voz.bin"; echo
-          echo "::error title=La voz de Google no responde::Revisa la clave GOOGLE_TTS_KEY, la API Cloud Text-to-Speech y la facturación de Google Cloud."
+          head -c 500 "$RUNNER_TEMP/voz.bin" 2>/dev/null || true
+          echo
+          if [ "$status" = "000" ]; then
+            echo "::error title=Servidor inalcanzable::No se pudo conectar con $URL. Revisa el subdominio workers.dev en Cloudflare."
+          else
+            echo "::error title=La voz de Google no responde::Revisa la clave GOOGLE_TTS_KEY, la API Cloud Text-to-Speech y la facturación de Google Cloud."
+          fi
           exit 1
 
   build:
     needs: voice-server
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    env:
-      # Solo se conecta la voz natural si el servidor pasó la prueba con Google.
-      VITE_TTS_URL: ${{ needs.voice-server.result == 'success' && needs.voice-server.outputs.url || '' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -108,6 +143,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+        env:
+          # Solo se conecta la voz natural si el servidor pasó la prueba con Google.
+          VITE_TTS_URL: ${{ needs.voice-server.result == 'success' && needs.voice-server.outputs.url || '' }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:

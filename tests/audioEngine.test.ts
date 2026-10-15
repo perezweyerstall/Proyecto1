@@ -6,16 +6,26 @@ import { segment, wordsIn } from '../src/lib/text';
 
 /** Elemento <audio> mínimo controlado por la prueba. */
 class FakeAudio {
-  src = '';
+  private source = '';
   preload = '';
   currentTime = 0;
+  /** Como en el navegador: cambiar la fuente vuelve al inicio. */
+  get src() {
+    return this.source;
+  }
+  set src(value: string) {
+    this.source = value;
+    this.currentTime = 0;
+    this.duration = NaN;
+  }
   duration = NaN;
   playbackRate = 1;
   paused = true;
   ended = false;
+  loop = false;
   onended: (() => void) | null = null;
   onerror: (() => void) | null = null;
-  private listeners: Record<string, Array<() => void>> = {};
+  private listeners: Record<string, Array<{ fn: () => void; once: boolean }>> = {};
   playResult: () => Promise<void> = () => Promise.resolve();
   play() {
     this.paused = false;
@@ -24,15 +34,27 @@ class FakeAudio {
   pause() {
     this.paused = true;
   }
-  addEventListener(type: string, fn: () => void) {
-    (this.listeners[type] ??= []).push(fn);
+  addEventListener(type: string, fn: () => void, options?: { once?: boolean }) {
+    (this.listeners[type] ??= []).push({ fn, once: !!options?.once });
+  }
+  emit(type: string) {
+    const entries = this.listeners[type] ?? [];
+    this.listeners[type] = entries.filter((e) => !e.once);
+    entries.forEach((e) => e.fn());
+  }
+  /** El sistema pausa o reanuda el audio por su cuenta. */
+  systemPause() {
+    this.paused = true;
+    this.emit('pause');
+  }
+  systemPlay() {
+    this.paused = false;
+    this.emit('play');
   }
   /** Simula la carga de metadatos y el inicio del clip. */
   loadMetadata(duration: number) {
     this.duration = duration;
-    const fns = this.listeners.loadedmetadata ?? [];
-    this.listeners.loadedmetadata = [];
-    fns.forEach((fn) => fn());
+    this.emit('loadedmetadata');
   }
   finish() {
     this.ended = true;
@@ -43,8 +65,9 @@ class FakeAudio {
 
 const TEXT = 'Hola mundo. Adiós amigo.';
 
-function setup(options: { failWith?: TtsError } = {}) {
+function setup(options: { failWith?: TtsError; keepSession?: boolean; requestDelayMs?: number } = {}) {
   const audio = new FakeAudio();
+  const created: FakeAudio[] = [];
   const synthesized: string[] = [];
   const client: TtsClient = {
     synthesize: vi.fn(async (text: string) => {
@@ -67,7 +90,13 @@ function setup(options: { failWith?: TtsError } = {}) {
     {
       client,
       cache,
-      createAudio: () => audio as unknown as HTMLAudioElement,
+      createAudio: () => {
+        const element = created.length === 0 ? audio : new FakeAudio();
+        created.push(element);
+        return element as unknown as HTMLAudioElement;
+      },
+      keepSession: options.keepSession,
+      requestDelayMs: options.requestDelayMs,
       createObjectURL: () => `blob:${++urls}`,
       revokeObjectURL: (url) => revoked.push(url),
       schedule: (fn) => {
@@ -80,7 +109,7 @@ function setup(options: { failWith?: TtsError } = {}) {
     'es-US-Chirp3-HD-Kore',
   );
   engine.load(segment(TEXT), 0);
-  return { engine, audio, synthesized, store, revoked, tick: () => tick() };
+  return { engine, audio, created, synthesized, store, revoked, tick: () => tick() };
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -190,7 +219,7 @@ describe('AudioEngine', () => {
     engine.play();
     await flush();
     expect(engine.getSnapshot()).toMatchObject({ status: 'paused', buffering: false });
-    expect(onError).toHaveBeenCalledWith('monthly-limit');
+    expect(onError).toHaveBeenCalledWith('monthly-limit', '2026-11-01');
   });
 
   it('informa si el navegador bloquea la reproducción', async () => {
@@ -214,6 +243,63 @@ describe('AudioEngine', () => {
     expect(audio.src).toBe('blob:1');
     audio.finish();
     expect(engine.getSnapshot()).toMatchObject({ status: 'idle', sentence: 0 });
+  });
+
+  it('al reanudar tras un salto en pausa, empieza en el punto pedido', async () => {
+    const { engine, audio } = setup();
+    engine.play();
+    await flush();
+    audio.loadMetadata(2);
+    audio.currentTime = 1.4;
+    engine.pause();
+    // «Frase anterior» en pausa vuelve al inicio de la frase.
+    engine.previous();
+    engine.play();
+    await flush();
+    expect(audio.src).toBe('blob:2');
+    expect(audio.currentTime).toBe(0);
+    expect(engine.getSnapshot()).toMatchObject({ status: 'playing', sentence: 0 });
+  });
+
+  it('refleja las pausas y reanudaciones del sistema', async () => {
+    const { engine, audio } = setup();
+    engine.play();
+    await flush();
+    audio.systemPause();
+    expect(engine.getSnapshot().status).toBe('paused');
+    audio.systemPlay();
+    expect(engine.getSnapshot().status).toBe('playing');
+    // El token se conserva: la frase termina y encadena la siguiente.
+    audio.finish();
+    expect(engine.getSnapshot().sentence).toBe(1);
+  });
+
+  it('no pide audio de las frases que se saltan seguidas', async () => {
+    vi.useFakeTimers();
+    try {
+      const { engine, synthesized } = setup({ requestDelayMs: 150 });
+      engine.load(segment('Uno. Dos. Tres. Cuatro.'), 0);
+      engine.play();
+      engine.next();
+      engine.next();
+      await vi.advanceTimersByTimeAsync(400);
+      expect(synthesized[0]).toBe('Tres.');
+      expect(synthesized).not.toContain('Uno.');
+      expect(synthesized).not.toContain('Dos.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('en Android mantiene la sesión con un bucle de silencio', async () => {
+    const { engine, created } = setup({ keepSession: true });
+    engine.play();
+    const keeper = created[1];
+    expect(keeper.loop).toBe(true);
+    expect(keeper.paused).toBe(false);
+    await flush();
+    engine.pause();
+    expect(keeper.paused).toBe(true);
   });
 
   it('libera las direcciones de audio al cambiar de frase', async () => {

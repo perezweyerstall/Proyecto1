@@ -13,6 +13,12 @@ export const DEFAULT_LIMIT = 900_000;
 /** Longitud máxima de un fragmento. Las frases de la app no pasan de 220 caracteres. */
 export const MAX_TEXT = 600;
 
+/**
+ * Caracteres por minuto. La lectura a 3,5× usa unos 3200.
+ * Frena un código filtrado o un fallo del cliente: vaciar el mes llevaría horas, no segundos.
+ */
+export const MINUTE_LIMIT = 6000;
+
 /** Interpreta el límite configurado y lo recorta al máximo seguro. */
 export function resolveLimit(raw: string | undefined): number {
   const value = Number(raw);
@@ -58,6 +64,24 @@ export function monthKeys(date: Date): string[] {
   ];
 }
 
+/** Clave del minuto en curso, en UTC. */
+export function minuteKey(date: Date): string {
+  return `min:${date.toISOString().slice(0, 16)}`;
+}
+
+/** Límite de cada contador: los meses usan el límite mensual; el minuto, MINUTE_LIMIT. */
+export interface Bucket {
+  key: string;
+  limit: number;
+}
+
+export function buckets(date: Date, monthlyLimit: number): Bucket[] {
+  return [
+    ...monthKeys(date).map((key) => ({ key, limit: monthlyLimit })),
+    { key: minuteKey(date), limit: MINUTE_LIMIT },
+  ];
+}
+
 /**
  * Fecha en que se renueva el uso: el primer día del mes siguiente (calendario del Pacífico).
  * Devuelve AAAA-MM-DD para mostrarla al usuario.
@@ -74,6 +98,11 @@ export interface CounterStore {
   get(key: string): number;
   set(key: string, value: number): void;
 }
+
+export type ReserveResult = Reservation & {
+  /** Contador que impidió la reserva. */
+  blockedBy?: 'month' | 'minute';
+};
 
 export interface Reservation {
   ok: boolean;
@@ -92,17 +121,26 @@ export class QuotaLedger {
     return Math.max(0, ...keys.map((key) => this.store.get(key)));
   }
 
-  /** Reserva `chars` en todos los meses o en ninguno. */
-  reserve(keys: string[], chars: number, limit: number): Reservation {
-    const used = this.usage(keys);
-    if (chars <= 0 || used + chars > limit) return { ok: false, used };
-    for (const key of keys) this.store.set(key, this.store.get(key) + chars);
-    return { ok: true, used: this.usage(keys) };
+  /**
+   * Reserva `chars` en todos los contadores o en ninguno.
+   * `used` informa del mes más cargado.
+   */
+  reserve(entries: Bucket[], chars: number): ReserveResult {
+    const months = entries.filter((e) => !e.key.startsWith('min:')).map((e) => e.key);
+    const used = this.usage(months);
+    if (chars <= 0) return { ok: false, used, blockedBy: 'month' };
+    for (const entry of entries) {
+      if (this.store.get(entry.key) + chars > entry.limit) {
+        return { ok: false, used, blockedBy: entry.key.startsWith('min:') ? 'minute' : 'month' };
+      }
+    }
+    for (const entry of entries) this.store.set(entry.key, this.store.get(entry.key) + chars);
+    return { ok: true, used: this.usage(months) };
   }
 
   /** Devuelve una reserva que Google rechazó sin facturar. */
-  release(keys: string[], chars: number): number {
-    for (const key of keys) this.store.set(key, Math.max(0, this.store.get(key) - chars));
-    return this.usage(keys);
+  release(entries: Bucket[], chars: number): number {
+    for (const entry of entries) this.store.set(entry.key, Math.max(0, this.store.get(entry.key) - chars));
+    return this.usage(entries.filter((e) => !e.key.startsWith('min:')).map((e) => e.key));
   }
 }

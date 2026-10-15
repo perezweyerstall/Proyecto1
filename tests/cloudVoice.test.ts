@@ -34,6 +34,7 @@ describe('createTtsClient', () => {
       code: 'monthly-limit',
       resetsOn: '2026-11-01',
     });
+    await expect(make(429, { error: 'rate-limit' }).synthesize('a', 'v')).rejects.toMatchObject({ code: 'rate-limit' });
     await expect(make(502, { error: 'upstream' }).synthesize('a', 'v')).rejects.toMatchObject({ code: 'server' });
     await expect(make(503, { error: 'not-configured' }).synthesize('a', 'v')).rejects.toMatchObject({ code: 'not-configured' });
   });
@@ -55,7 +56,7 @@ describe('createTtsClient', () => {
   });
 
   it('formatea la fecha de renovación', () => {
-    expect(formatResetDate('2026-11-01')).toBe('1 de noviembre');
+    expect(formatResetDate('2026-11-01')).toBe('el 1 de noviembre');
     expect(formatResetDate(undefined)).toBe('el próximo mes');
   });
 });

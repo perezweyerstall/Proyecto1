@@ -28,6 +28,8 @@ interface PlayerValue {
   cloud: boolean;
   /** La app se publicó con servidor de voz natural. */
   cloudAvailable: boolean;
+  /** La voz natural está elegida, aunque falte el código de acceso. */
+  cloudReady: boolean;
   /** Cliente del servidor de voz, o `null` sin servidor. */
   client: TtsClient | null;
   /** Uso gratuito del mes, según la última respuesta del servidor. */
@@ -62,6 +64,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   'not-configured': 'El servidor de voz aún no está configurado.',
   'missing-code': 'Escribe el código de acceso en Ajustes para usar la voz natural.',
   unauthorized: 'El código de acceso no es correcto. Revísalo en Ajustes.',
+  'rate-limit': 'Demasiadas frases seguidas. Espera un minuto y vuelve a reproducir.',
 };
 
 /** Errores que se resuelven en Ajustes. */
@@ -134,13 +137,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             createAudio: () => new Audio(),
             createObjectURL: (blob) => URL.createObjectURL(blob),
             revokeObjectURL: (url) => URL.revokeObjectURL(url),
+            keepSession: /Android/i.test(navigator.userAgent),
+            requestDelayMs: 180,
           },
           settings.cloudVoice,
         )
       : null;
     return { client, cloud, device: createDeviceEngine() };
   });
-  const cloudActive = engines.cloud !== null && settings.voiceSource === 'cloud';
+  // Sin código de acceso, suena la voz del dispositivo hasta que el usuario lo escriba.
+  const cloudActive = engines.cloud !== null && settings.voiceSource === 'cloud' && settings.accessCode.trim() !== '';
   const engine: PlaybackEngine | null = cloudActive ? engines.cloud : engines.device;
 
   // Al cambiar de motor, el documento pasa al nuevo en la misma posición.
@@ -220,10 +226,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const current = docRef.current;
       if (current) void savePosition(current.length, true);
     };
-    engine.onError = (code) => {
+    engine.onError = (code, detail) => {
       if (code === 'monthly-limit') {
-        const when = formatResetDate(usageRef.current?.resetsOn);
-        notify(`Llegaste al límite gratuito de este mes. La voz natural vuelve el ${when}.`, {
+        const when = formatResetDate(detail ?? usageRef.current?.resetsOn);
+        notify(`Llegaste al límite gratuito de este mes. La voz natural vuelve ${when}.`, {
           label: 'Ajustes',
           onClick: () => navigate({ name: 'settings' }),
         });
@@ -286,6 +292,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       engine,
       cloud: cloudActive,
       cloudAvailable: engines.cloud !== null,
+      cloudReady: engines.cloud !== null && settings.voiceSource === 'cloud',
       client: engines.client,
       usage,
       refreshUsage,
@@ -296,7 +303,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       open,
       close,
     }),
-    [engine, cloudActive, engines, usage, refreshUsage, doc, segmented, voices, voice, open, close],
+    [engine, cloudActive, engines, settings.voiceSource, usage, refreshUsage, doc, segmented, voices, voice, open, close],
   );
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;
 }
