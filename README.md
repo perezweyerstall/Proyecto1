@@ -98,11 +98,11 @@ Condiciones para que la garantía se cumpla:
 
 1. **Google Cloud.** Crea un proyecto y activa la facturación. Activa la API «Cloud Text-to-Speech». Crea una clave de API y restríngela a esa API.
 2. **Cloudflare.** Crea una cuenta gratuita. Abre «Workers y Pages» una vez para elegir el subdominio `workers.dev`. Crea un token de API con la plantilla «Edit Cloudflare Workers». Copia el «Account ID»: son 32 letras y números.
-3. **GitHub.** En Settings → Secrets and variables → Actions, crea cuatro secretos:
-   - `CLOUDFLARE_API_TOKEN`: el token de Cloudflare.
-   - `CLOUDFLARE_ACCOUNT_ID`: el ID de la cuenta de Cloudflare.
-   - `GOOGLE_TTS_KEY`: la clave de Google.
-   - `APP_TOKEN`: un código de acceso largo y aleatorio, de 16 caracteres o más. Usa un generador de contraseñas. No uses palabras como «escucha», «voz» ni tu nombre.
+3. **GitHub.** En Settings → Secrets and variables → Actions, crea cuatro secretos con «New repository secret». En «Name» escribe el nombre. En «Secret» pega el valor real, nunca su descripción:
+   - `CLOUDFLARE_API_TOKEN`: el token que Cloudflare muestra una sola vez al crearlo. Unos 40 caracteres sin espacios.
+   - `CLOUDFLARE_ACCOUNT_ID`: el «Account ID». 32 caracteres: números y letras de la a a la f.
+   - `GOOGLE_TTS_KEY`: la clave de API de Google. Empieza por `AIza` y tiene 39 caracteres.
+   - `APP_TOKEN`: un código de un generador de contraseñas. 16 caracteres o más, sin tildes ni eñes. No uses palabras como «escucha», «voz» ni tu nombre.
 4. **Publicación.** Ejecuta el flujo «Publicar en GitHub Pages» en la pestaña Actions. El flujo publica el servidor, prueba la voz y publica la app.
 5. **Dispositivos.** En Ajustes → Código de acceso, escribe el valor de `APP_TOKEN`.
 

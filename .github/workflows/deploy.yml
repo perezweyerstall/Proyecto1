@@ -79,6 +79,9 @@ jobs:
           if [ "${#APP_TOKEN}" -lt 16 ]; then
             echo "::warning title=APP_TOKEN corto::Usa un código de 16 caracteres o más, generado al azar."
           fi
+          if [[ "$APP_TOKEN" == *" "* ]]; then
+            echo "::warning title=APP_TOKEN con espacios::¿Es una descripción? Usa un código aleatorio sin espacios."
+          fi
           log="$RUNNER_TEMP/deploy.log"
           if ! npx wrangler deploy > "$log" 2>&1; then
             cat "$log"

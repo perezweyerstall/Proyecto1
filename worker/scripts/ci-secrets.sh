@@ -1,17 +1,21 @@
 # Limpia los secretos de GitHub antes de publicar el servidor de voz.
-# Corrige los errores al pegar: espacios, espacios invisibles, comillas o texto de más.
+# Corrige los errores al pegar: espacios en los extremos, comillas o la dirección completa.
+# Rechaza los valores que no pueden servir, como una descripción en lugar del valor real.
 # Uso: `source scripts/ci-secrets.sh`. Solo trata las variables definidas.
+# Muestra todos los errores juntos y termina con error si hay alguno.
 # GitHub ya oculta el valor original. Cada valor limpio se oculta con ::add-mask::.
 # Los valores limpios nunca tienen saltos de línea: así la máscara los cubre enteros.
 # Necesita Node.js: trata los espacios Unicode igual que la app.
 
+ci_errors=0
+
 ci_mask() {
-  if [ -n "$1" ]; then echo "::add-mask::$1"; fi
+  echo "::add-mask::$1"
 }
 
 ci_fail() {
   echo "::error title=$1::$2"
-  exit 1
+  ci_errors=$((ci_errors + 1))
 }
 
 ci_notice_if_changed() {
@@ -25,100 +29,140 @@ ci_trim() {
   CI_TEXT="$1" node -e 'process.stdout.write(process.env.CI_TEXT.trim())'
 }
 
-# Quita todos los espacios, los caracteres de ancho cero y las comillas.
-ci_compact() {
-  CI_TEXT="$1" node -e 'process.stdout.write(process.env.CI_TEXT.replace(/[\s​-‍⁠﻿"'"'"'`“”‘’«»]/g, ""))'
+# Quita los espacios de los extremos, los caracteres de ancho cero y las comillas.
+ci_unwrap() {
+  CI_TEXT="$1" node -e 'process.stdout.write(process.env.CI_TEXT.replace(/[​-‍⁠﻿"'"'"'`“”‘’«»]/g, "").trim())'
 }
 
-# Falla si queda algún carácter fuera del ASCII visible: no viajaría en una cabecera HTTP.
-ci_require_ascii() {
-  if LC_ALL=C grep -q '[^!-~]' <<< "$2"; then
-    ci_fail "$1 no es válido" "Tiene letras con tilde, comillas tipográficas o espacios invisibles. Cópialo de nuevo y guárdalo en GitHub."
-  fi
+# Indica si el valor tiene espacios, también invisibles.
+ci_has_spaces() {
+  CI_TEXT="$1" node -e 'process.exit(/\s/.test(process.env.CI_TEXT) ? 0 : 1)'
 }
 
-if [ -n "${CLOUDFLARE_ACCOUNT_ID+x}" ]; then
-  ci_raw="$CLOUDFLARE_ACCOUNT_ID"
+# Indica si el valor tiene caracteres fuera del ASCII visible: no viajarían en una cabecera HTTP.
+ci_has_non_ascii() {
+  LC_ALL=C grep -q '[^!-~]' <<< "$1"
+}
+
+CI_DESCRIPTION="Tiene espacios en medio: parece una descripción, no el valor real."
+
+ci_clean_account_id() {
+  local raw="$CLOUDFLARE_ACCOUNT_ID" value hint
   # El ID de cuenta son 32 caracteres hexadecimales.
   # También sirve la dirección del panel de Cloudflare pegada entera.
-  if [[ "$ci_raw" =~ (^|[^0-9A-Za-z])([0-9a-fA-F]{32})([^0-9A-Za-z]|$) ]]; then
-    ci_value="${BASH_REMATCH[2]}"
-  else
-    ci_value="$(ci_compact "$ci_raw")"
-  fi
-  ci_mask "$ci_value"
-  if [ -z "$ci_value" ]; then
-    ci_fail "CLOUDFLARE_ACCOUNT_ID vacío" "Copia el «Account ID» de Cloudflare y guárdalo de nuevo en GitHub."
-  fi
-  if ! [[ "$ci_value" =~ ^[A-Za-z0-9_-]+$ ]]; then
-    if [[ "$ci_raw" == *@* ]]; then
-      ci_hint="Parece un correo electrónico."
-    elif [[ "$ci_raw" == *[/.]* ]]; then
-      ci_hint="Parece una dirección web o un dominio."
+  if ! [[ "$raw" =~ (^|[^0-9A-Za-z])([0-9a-fA-F]{32})([^0-9A-Za-z]|$) ]]; then
+    value="$(ci_unwrap "$raw")"
+    if [ -z "$value" ]; then
+      hint="Está vacío."
+    elif ci_has_spaces "$value"; then
+      hint="$CI_DESCRIPTION"
+    elif [[ "$value" == *@* ]]; then
+      hint="Parece un correo electrónico."
+    elif [[ "$value" == *[/.]* ]]; then
+      hint="Parece una dirección web o un dominio."
     else
-      ci_hint="Tiene ${#ci_value} caracteres y alguno no es válido."
+      hint="Tiene ${#value} caracteres."
     fi
-    ci_fail "CLOUDFLARE_ACCOUNT_ID no es válido" "$ci_hint El ID de cuenta son 32 letras y números. Cópialo de Cloudflare: «Account ID» en Workers y Pages. Guárdalo de nuevo en GitHub."
+    ci_fail "CLOUDFLARE_ACCOUNT_ID no es válido" "$hint El «Account ID» tiene 32 caracteres: números y letras de la a a la f. Cópialo de Cloudflare en Workers y Pages."
+    return 0
   fi
-  ci_notice_if_changed CLOUDFLARE_ACCOUNT_ID "$ci_raw" "$ci_value"
-  export CLOUDFLARE_ACCOUNT_ID="$ci_value"
-fi
+  value="${BASH_REMATCH[2]}"
+  ci_mask "$value"
+  ci_notice_if_changed CLOUDFLARE_ACCOUNT_ID "$raw" "$value"
+  export CLOUDFLARE_ACCOUNT_ID="$value"
+}
 
-if [ -n "${CLOUDFLARE_API_TOKEN+x}" ]; then
-  ci_raw="$CLOUDFLARE_API_TOKEN"
+ci_clean_api_token() {
+  local raw="$CLOUDFLARE_API_TOKEN" value
+  local howto="Guarda el token que Cloudflare muestra una sola vez al crearlo: unos 40 caracteres sin espacios."
   # También sirve el comando de prueba de Cloudflare pegado entero: «Bearer <token>».
-  if [[ "$ci_raw" =~ Bearer[^A-Za-z0-9_-]+([A-Za-z0-9_-]+) ]]; then
-    ci_value="${BASH_REMATCH[1]}"
+  if [[ "$raw" =~ Bearer[^A-Za-z0-9_-]+([A-Za-z0-9_-]+) ]]; then
+    value="${BASH_REMATCH[1]}"
   else
-    ci_value="$(ci_compact "$ci_raw")"
+    value="$(ci_unwrap "$raw")"
   fi
-  ci_mask "$ci_value"
-  if [ -z "$ci_value" ]; then
-    ci_fail "CLOUDFLARE_API_TOKEN vacío" "Crea un token con la plantilla «Edit Cloudflare Workers» y guárdalo de nuevo en GitHub."
+  if [ -z "$value" ]; then
+    ci_fail "CLOUDFLARE_API_TOKEN vacío" "$howto"
+    return 0
   fi
-  ci_require_ascii CLOUDFLARE_API_TOKEN "$ci_value"
+  if ci_has_spaces "$value"; then
+    ci_fail "CLOUDFLARE_API_TOKEN no es válido" "$CI_DESCRIPTION $howto"
+    return 0
+  fi
+  if ci_has_non_ascii "$value"; then
+    ci_fail "CLOUDFLARE_API_TOKEN no es válido" "Tiene letras con tilde o caracteres invisibles. $howto"
+    return 0
+  fi
   # Errores frecuentes: pegar la «Global API Key» o el «Account ID» en lugar del token.
-  if [[ "$ci_value" =~ ^[0-9a-fA-F]{37}$ ]]; then
-    ci_fail "CLOUDFLARE_API_TOKEN es la Global API Key" "Ese valor no es un token. Crea un token con la plantilla «Edit Cloudflare Workers» y guárdalo en GitHub."
+  if [[ "$value" =~ ^[0-9a-fA-F]{37}$ ]]; then
+    ci_fail "CLOUDFLARE_API_TOKEN es la Global API Key" "Ese valor no es un token. Crea un token con la plantilla «Edit Cloudflare Workers»."
+    return 0
   fi
-  if [[ "$ci_value" =~ ^[0-9a-fA-F]{32}$ ]]; then
-    ci_fail "CLOUDFLARE_API_TOKEN es un ID" "Ese valor parece el «Account ID». Crea un token con la plantilla «Edit Cloudflare Workers» y guárdalo en GitHub."
+  if [[ "$value" =~ ^[0-9a-fA-F]{32}$ ]]; then
+    ci_fail "CLOUDFLARE_API_TOKEN es un ID" "Ese valor parece el «Account ID». Crea un token con la plantilla «Edit Cloudflare Workers»."
+    return 0
   fi
-  ci_notice_if_changed CLOUDFLARE_API_TOKEN "$ci_raw" "$ci_value"
-  export CLOUDFLARE_API_TOKEN="$ci_value"
-fi
+  if [ "${#value}" -lt 30 ]; then
+    ci_fail "CLOUDFLARE_API_TOKEN no es válido" "Tiene ${#value} caracteres: es corto para un token. $howto"
+    return 0
+  fi
+  ci_mask "$value"
+  ci_notice_if_changed CLOUDFLARE_API_TOKEN "$raw" "$value"
+  export CLOUDFLARE_API_TOKEN="$value"
+}
 
-if [ -n "${GOOGLE_TTS_KEY+x}" ]; then
-  ci_raw="$GOOGLE_TTS_KEY"
+ci_clean_google_key() {
+  local raw="$GOOGLE_TTS_KEY" value
+  local howto="Guarda la clave de API de Google Cloud: empieza por AIza y tiene 39 caracteres."
   # Las claves de API de Google empiezan por «AIza» y tienen 39 caracteres.
-  if [[ "$ci_raw" =~ (^|[^0-9A-Za-z_-])(AIza[0-9A-Za-z_-]{35})([^0-9A-Za-z_-]|$) ]]; then
-    ci_value="${BASH_REMATCH[2]}"
+  if [[ "$raw" =~ (^|[^0-9A-Za-z_-])(AIza[0-9A-Za-z_-]{35})([^0-9A-Za-z_-]|$) ]]; then
+    value="${BASH_REMATCH[2]}"
   else
-    ci_value="$(ci_compact "$ci_raw")"
-    echo "::warning title=GOOGLE_TTS_KEY con formato inesperado::Las claves de API de Google empiezan por AIza y tienen 39 caracteres. Comprueba que copiaste la clave de API."
+    value="$(ci_unwrap "$raw")"
+    if [ -z "$value" ]; then
+      ci_fail "GOOGLE_TTS_KEY vacío" "$howto"
+      return 0
+    fi
+    if ci_has_spaces "$value"; then
+      ci_fail "GOOGLE_TTS_KEY no es válido" "$CI_DESCRIPTION $howto"
+      return 0
+    fi
+    if ci_has_non_ascii "$value"; then
+      ci_fail "GOOGLE_TTS_KEY no es válido" "Tiene letras con tilde o caracteres invisibles. $howto"
+      return 0
+    fi
+    echo "::warning title=GOOGLE_TTS_KEY con formato inesperado::$howto Comprueba que copiaste la clave de API."
   fi
-  ci_mask "$ci_value"
-  if [ -z "$ci_value" ]; then
-    ci_fail "GOOGLE_TTS_KEY vacío" "Copia la clave de API de Google Cloud y guárdala de nuevo en GitHub."
-  fi
-  ci_require_ascii GOOGLE_TTS_KEY "$ci_value"
-  ci_notice_if_changed GOOGLE_TTS_KEY "$ci_raw" "$ci_value"
-  export GOOGLE_TTS_KEY="$ci_value"
-fi
+  ci_mask "$value"
+  ci_notice_if_changed GOOGLE_TTS_KEY "$raw" "$value"
+  export GOOGLE_TTS_KEY="$value"
+}
 
-if [ -n "${APP_TOKEN+x}" ]; then
-  ci_raw="$APP_TOKEN"
+ci_clean_app_token() {
+  local raw="$APP_TOKEN" value
+  local howto="Usa un código aleatorio de un generador de contraseñas: 16 caracteres o más, sin tildes ni eñes."
   # La app quita los espacios de los extremos del código. Aquí se hace lo mismo.
-  ci_value="$(ci_trim "$ci_raw")"
-  if [ -z "$ci_value" ]; then
-    ci_fail "APP_TOKEN vacío" "Genera un código largo y aleatorio y guárdalo de nuevo en GitHub."
+  value="$(ci_trim "$raw")"
+  if [ -z "$value" ]; then
+    ci_fail "APP_TOKEN vacío" "$howto"
+    return 0
   fi
   # El navegador solo envía en una cabecera caracteres ASCII en una línea.
-  if [[ "$ci_value" == *$'\n'* ]] || LC_ALL=C grep -q '[^ -~]' <<< "$ci_value"; then
-    ci_fail "APP_TOKEN no es válido" "Tiene letras con tilde, comillas tipográficas, espacios invisibles o varias líneas. Usa solo letras sin tilde, números y símbolos del teclado. Cámbialo en GitHub y en Ajustes de la app."
+  if [[ "$value" == *$'\n'* ]] || LC_ALL=C grep -q '[^ -~]' <<< "$value"; then
+    ci_fail "APP_TOKEN no es válido" "Tiene tildes, eñes, comillas tipográficas, espacios invisibles o varias líneas. ¿Guardaste una descripción en lugar del código? $howto"
+    return 0
   fi
-  ci_mask "$ci_value"
-  export APP_TOKEN="$ci_value"
-fi
+  ci_mask "$value"
+  export APP_TOKEN="$value"
+}
 
-unset ci_raw ci_value ci_hint
+if [ -n "${CLOUDFLARE_ACCOUNT_ID+x}" ]; then ci_clean_account_id; fi
+if [ -n "${CLOUDFLARE_API_TOKEN+x}" ]; then ci_clean_api_token; fi
+if [ -n "${GOOGLE_TTS_KEY+x}" ]; then ci_clean_google_key; fi
+if [ -n "${APP_TOKEN+x}" ]; then ci_clean_app_token; fi
+
+if [ "$ci_errors" -gt 0 ]; then
+  echo "::error title=Secretos por corregir::Guarda el valor real de cada secreto indicado en GitHub: Settings, Secrets and variables, Actions. Después ejecuta de nuevo la publicación."
+  exit 1
+fi
+unset ci_errors
