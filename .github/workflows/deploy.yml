@@ -74,19 +74,33 @@ jobs:
           GOOGLE_TTS_KEY: ${{ secrets.GOOGLE_TTS_KEY }}
           APP_TOKEN: ${{ secrets.APP_TOKEN }}
         run: |
-          if ! npx wrangler deploy > "$RUNNER_TEMP/deploy.log" 2>&1; then
-            cat "$RUNNER_TEMP/deploy.log"
-            if grep -qi 'workers.dev subdomain' "$RUNNER_TEMP/deploy.log"; then
+          # Corrige los secretos pegados con espacios o texto de más.
+          source scripts/ci-secrets.sh
+          if [ "${#APP_TOKEN}" -lt 16 ]; then
+            echo "::warning title=APP_TOKEN corto::Usa un código de 16 caracteres o más, generado al azar."
+          fi
+          log="$RUNNER_TEMP/deploy.log"
+          if ! npx wrangler deploy > "$log" 2>&1; then
+            cat "$log"
+            if grep -qi 'workers.dev subdomain' "$log"; then
               echo "::error title=Falta el subdominio workers.dev::Abre Workers y Pages en Cloudflare una vez y elige un subdominio."
+            elif grep -qiE 'invalid account id|could not route|code: 7003' "$log"; then
+              echo "::error title=CLOUDFLARE_ACCOUNT_ID no corresponde a ninguna cuenta::Copia el «Account ID» de Cloudflare en Workers y Pages. No uses el «Zone ID»."
+            elif grep -qiE 'authentication error|unable to authenticate|invalid api token|code: 1000[01]|code: 9109' "$log"; then
+              echo "::error title=El token de Cloudflare no sirve::Crea un token con la plantilla «Edit Cloudflare Workers» en la misma cuenta. Guárdalo en CLOUDFLARE_API_TOKEN."
             else
               echo "::error title=No se pudo publicar el servidor::Revisa CLOUDFLARE_API_TOKEN (plantilla Edit Cloudflare Workers) y CLOUDFLARE_ACCOUNT_ID."
             fi
             exit 1
           fi
-          cat "$RUNNER_TEMP/deploy.log"
-          printf '%s' "$GOOGLE_TTS_KEY" | npx wrangler secret put GOOGLE_TTS_KEY
-          printf '%s' "$APP_TOKEN" | npx wrangler secret put APP_TOKEN
-          url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' "$RUNNER_TEMP/deploy.log" | head -n 1)
+          cat "$log"
+          for name in GOOGLE_TTS_KEY APP_TOKEN; do
+            if ! printf '%s' "${!name}" | npx wrangler secret put "$name"; then
+              echo "::error title=No se pudo guardar $name::Revisa los permisos del token de Cloudflare (plantilla Edit Cloudflare Workers)."
+              exit 1
+            fi
+          done
+          url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' "$log" | head -n 1)
           if [ -z "$url" ]; then
             echo "::error title=Sin dirección del servidor::Activa el subdominio workers.dev en Cloudflare: Workers y Pages."
             exit 1
@@ -105,6 +119,7 @@ jobs:
           URL: ${{ steps.deploy.outputs.url }}
           APP_TOKEN: ${{ secrets.APP_TOKEN }}
         run: |
+          source scripts/ci-secrets.sh
           # Genera «Hola.» (5 caracteres del uso gratuito) para comprobar la clave de Google.
           status=000
           for attempt in 1 2 3 4 5; do

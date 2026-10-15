@@ -97,7 +97,7 @@ Condiciones para que la garantía se cumpla:
 ### Configuración
 
 1. **Google Cloud.** Crea un proyecto y activa la facturación. Activa la API «Cloud Text-to-Speech». Crea una clave de API y restríngela a esa API.
-2. **Cloudflare.** Crea una cuenta gratuita. Abre «Workers y Pages» una vez para elegir el subdominio `workers.dev`. Crea un token de API con la plantilla «Edit Cloudflare Workers» y copia el ID de la cuenta.
+2. **Cloudflare.** Crea una cuenta gratuita. Abre «Workers y Pages» una vez para elegir el subdominio `workers.dev`. Crea un token de API con la plantilla «Edit Cloudflare Workers». Copia el «Account ID»: son 32 letras y números.
 3. **GitHub.** En Settings → Secrets and variables → Actions, crea cuatro secretos:
    - `CLOUDFLARE_API_TOKEN`: el token de Cloudflare.
    - `CLOUDFLARE_ACCOUNT_ID`: el ID de la cuenta de Cloudflare.
@@ -107,6 +107,8 @@ Condiciones para que la garantía se cumpla:
 5. **Dispositivos.** En Ajustes → Código de acceso, escribe el valor de `APP_TOKEN`.
 
 Sin estos secretos, o sin el código en un dispositivo, la app usa la voz del dispositivo.
+
+La publicación corrige los errores al pegar: espacios, saltos de línea o la dirección completa del panel. Si un secreto no sirve, la pestaña Actions explica cuál y cómo corregirlo.
 
 ### Privacidad
 
